@@ -144,7 +144,15 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
         except Exception as e:
-            await update.message.reply_text(f"Error registering store bot: {str(e)}")
+            err_msg = str(e).lower()
+            if "duplicate key" in err_msg or "unique constraint" in err_msg or "violates unique" in err_msg:
+                await update.message.reply_text(
+                    "⚠️ *This Bot Token is already registered to another store on Nexa AI.*\n\n"
+                    "Please create a new bot via @BotFather or check your active stores.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(f"Error registering store bot: {str(e)}")
     else:
         await update.message.reply_text("Database connection inactive.")
 
