@@ -8,7 +8,7 @@ from supabase import create_client, Client
 # Initialize FastAPI
 app = FastAPI()
 
-# Load Environment Variables from Render's Server Environment
+# Load Environment Variables from Render
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -49,7 +49,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     },
                     {"role": "user", "content": user_text},
                 ],
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",  # Updated to valid Groq model
             )
             response_text = chat_completion.choices[0].message.content
         except Exception as e:
