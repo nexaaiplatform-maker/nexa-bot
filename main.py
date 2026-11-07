@@ -1,11 +1,12 @@
 import os
 import httpx
 from fastapi import FastAPI, Request
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ConversationHandler,
     filters,
     ContextTypes,
@@ -30,8 +31,8 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # Master Telegram Bot
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).write_timeout(7).build()
 
-# Onboarding States
-STORE_NAME, INVENTORY, BOT_TOKEN = range(3)
+# Onboarding Conversation States
+STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -50,8 +51,40 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["store_name"] = update.message.text
+    
+    # Present Interactive Elite UI Theme Options
+    keyboard = [
+        [InlineKeyboardButton("💎 Luxury Executive (VIP Concierge)", callback_data="theme_executive")],
+        [InlineKeyboardButton("⚡ High-Energy Sales (Fast Closer)", callback_data="theme_sales")],
+        [InlineKeyboardButton("🌿 Friendly Advisor (Warm & Helpful)", callback_data="theme_friendly")],
+        [InlineKeyboardButton("🎯 Direct Minimalist (Short & Precise)", callback_data="theme_minimalist")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
         f"Exquisite choice: *{update.message.text}*.\n\n"
+        "Now select the **AI Assistant Persona & Response Style** for your shop's bot:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    return UI_THEME
+
+async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    chosen_theme = query.data.replace("theme_", "")
+    context.user_data["ui_theme"] = chosen_theme
+    
+    theme_labels = {
+        "executive": "💎 Luxury Executive",
+        "sales": "⚡ High-Energy Sales",
+        "friendly": "🌿 Friendly Advisor",
+        "minimalist": "🎯 Direct Minimalist"
+    }
+    
+    await query.edit_message_text(
+        f"Selected Style: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
         "Now, please provide your complete inventory list, stock details, contact info, and pricing so our AI can curate accurate customer responses for you:",
         parse_mode="Markdown"
     )
@@ -69,6 +102,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_token = update.message.text.strip()
     owner_telegram_id = str(update.message.from_user.id)
     store_name = context.user_data.get("store_name")
+    ui_theme = context.user_data.get("ui_theme", "executive")
     inventory_data = context.user_data.get("inventory_data")
 
     if supabase:
@@ -78,6 +112,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "store_name": store_name,
                 "bot_token": bot_token,
                 "inventory_data": inventory_data,
+                "ui_theme": ui_theme,
                 "is_active": True
             }).execute()
             
@@ -96,8 +131,9 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success_message = (
                 f"🎉 *Congratulations! Your store {store_name} is officially live on Nexa AI!*\n\n"
                 f"🤖 *Bot Handle:* @{bot_username}\n"
+                f"🎨 *Active Theme Style:* {ui_theme.upper()}\n"
                 f"🔗 *Direct Link:* {bot_link}\n\n"
-                "⚡ *Live Feature Enabled:* Whenever a customer asks to buy or order, you will instantly receive a notification right here in Telegram!"
+                "⚡ *Live Lead Alert:* Whenever a customer asks to buy or order, you will instantly receive a notification right here in Telegram!"
             )
             
             await update.message.reply_text(success_message, parse_mode="Markdown")
@@ -118,7 +154,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("Registration cancelled. Type /register to restart.")
     return ConversationHandler.END
 
-# Master bot fallback handler
+# Master bot message handler
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -142,6 +178,7 @@ onboarding_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
         STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
+        UI_THEME: [CallbackQueryHandler(receive_ui_theme)],
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
     },
@@ -190,7 +227,7 @@ async def dynamic_store_webhook(store_id: str, request: Request):
     if not supabase:
         return {"ok": False, "error": "Database offline"}
 
-    # Fetch store
+    # Fetch store details
     store_res = supabase.table("stores").select("*").eq("id", store_id).execute()
     if not store_res.data:
         return {"ok": False, "error": "Store not found"}
@@ -199,10 +236,11 @@ async def dynamic_store_webhook(store_id: str, request: Request):
     bot_token = store["bot_token"]
     store_name = store["store_name"]
     inventory_data = store["inventory_data"]
+    ui_theme = store.get("ui_theme", "executive")
     owner_telegram_id = store.get("owner_telegram_id")
 
     message = data.get("message", {})
-    chat_id = message.get("chat", {}) .get("id")
+    chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text")
     username = message.get("from", {}).get("username", "Unknown User")
     first_name = message.get("from", {}).get("first_name", "Customer")
@@ -210,7 +248,7 @@ async def dynamic_store_webhook(store_id: str, request: Request):
     if not chat_id or not user_text:
         return {"ok": True}
 
-    # Fetch last 3 previous interactions for conversation context
+    # Fetch last 3 previous interactions for conversation memory
     history_messages = []
     try:
         chat_history = supabase.table("chats").select("user_message, bot_response").eq("user_id", str(chat_id)).order("created_at", desc=True).limit(3).execute()
@@ -220,12 +258,33 @@ async def dynamic_store_webhook(store_id: str, request: Request):
     except Exception:
         pass
 
-    # Build prompt messages
+    # Dynamic Theme Prompts
+    theme_prompts = {
+        "executive": (
+            f"You are the world-class executive concierge for {store_name}. "
+            "Maintain an ultra-polished, elegant, and high-end tone. Provide structured and refined responses."
+        ),
+        "sales": (
+            f"You are the top sales representative for {store_name}. "
+            "Maintain an enthusiastic, high-energy tone that creates excitement around the products and encourages closing sales quickly."
+        ),
+        "friendly": (
+            f"You are a friendly, warm, and welcoming local shop assistant for {store_name}. "
+            "Speak naturally, be deeply helpful, and make customers feel right at home."
+        ),
+        "minimalist": (
+            f"You are a direct and concise assistant for {store_name}. "
+            "Give brief, clear, to-the-point answers without fluff. State stock numbers, prices, and contact steps immediately."
+        )
+    }
+
+    selected_persona = theme_prompts.get(ui_theme, theme_prompts["executive"])
+
     system_prompt = (
-        f"You are the elite, helpful AI receptionist for {store_name}.\n\n"
+        f"{selected_persona}\n\n"
         f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
         "STRICT GROUNDING RULES:\n"
-        "1. Answer strictly using the inventory and contact details provided.\n"
+        "1. Answer strictly using the inventory and contact details provided above.\n"
         "2. NEVER invent phone numbers, addresses, or unlisted prices.\n"
         "3. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified to complete the sale."
     )
@@ -243,14 +302,14 @@ async def dynamic_store_webhook(store_id: str, request: Request):
         except Exception as e:
             response_text = f"Thank you for contacting {store_name}. We are processing your request. ({str(e)})"
 
-    # Send response to customer
+    # Send response back to customer
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={"chat_id": chat_id, "text": response_text}
         )
 
-    # Save to chat log
+    # Save to database chat log
     try:
         supabase.table("chats").insert({
             "user_id": str(chat_id),
