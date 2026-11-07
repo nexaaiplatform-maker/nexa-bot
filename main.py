@@ -2,50 +2,69 @@ import os
 from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai
+from groq import Groq
 from supabase import create_client, Client
 
 # Initialize FastAPI
 app = FastAPI()
 
-# Load Environment Variables
+# Load Environment Variables from Render's Server Environment
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Initialize Supabase & Gemini
+# Initialize Supabase & Groq
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # Initialize Telegram Bot Application
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).write_timeout(7).build()
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    welcome_text = (
         "Welcome to Nexa AI. It is an absolute privilege to assist you. "
         "How may we curate your experience with excellence today?"
     )
+    await update.message.reply_text(welcome_text)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
+        
     user_text = update.message.text
-    response_text = "Thank you for your valued inquiry. Our executive concierge team is attending to your request with utmost priority."
+    user_id = str(update.message.from_user.id)
+    response_text = "Thank you for your valued inquiry. Our executive team is attending to your request with utmost priority."
     
-    if gemini_client:
+    if groq_client:
         try:
-            response = gemini_client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=(
-                    "You are an elite, world-class executive concierge for a prestigious global multi-billion dollar enterprise. "
-                    "Your tone is impeccably polite, sophisticated, articulate, elegant, reassuring, and flawlessly professional. "
-                    f"Client inquiry: {user_text}"
-                )
+            chat_completion = groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Nexa AI, an elite, world-class executive receptionist for a prestigious global multi-billion dollar corporate enterprise. "
+                            "Your responses must be exceptionally fast, impeccably polite, articulate, reassuring, and delivered with top-tier executive refinement."
+                        ),
+                    },
+                    {"role": "user", "content": user_text},
+                ],
+                model="llama-3.3-70b-versatile",
             )
-            response_text = response.text
+            response_text = chat_completion.choices[0].message.content
         except Exception as e:
-            response_text = f"We appreciate your esteemed patience. Our systems are securely processing your request. (Notice: {str(e)})"
+            response_text = f"We appreciate your esteemed patience. (Notice: {str(e)})"
+
+    # Save interaction to Supabase database if available
+    if supabase:
+        try:
+            supabase.table("chats").insert({
+                "user_id": user_id,
+                "user_message": user_text,
+                "bot_response": response_text
+            }).execute()
+        except Exception:
+            pass
 
     await update.message.reply_text(response_text)
 
