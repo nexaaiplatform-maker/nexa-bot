@@ -16,21 +16,21 @@ from supabase import create_client, Client
 # Initialize FastAPI
 app = FastAPI()
 
-# Load Environment Variables from Render
+# Load Environment Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Initialize Supabase & Groq
+# Initialize Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Initialize Master Telegram Bot Application
+# Master Telegram Bot
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).write_timeout(7).build()
 
-# Conversation States for Merchant Onboarding
+# Onboarding States
 STORE_NAME, INVENTORY, BOT_TOKEN = range(3)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -40,7 +40,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text)
 
-# --- Onboarding Flow Handlers ---
+# --- Onboarding Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Nexa AI Merchant Onboarding Suite.\n\n"
@@ -52,7 +52,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["store_name"] = update.message.text
     await update.message.reply_text(
         f"Exquisite choice: *{update.message.text}*.\n\n"
-        "Now, please provide your complete inventory list, stock details, and pricing so our AI can curate accurate customer responses for you:",
+        "Now, please provide your complete inventory list, stock details, contact info, and pricing so our AI can curate accurate customer responses for you:",
         parse_mode="Markdown"
     )
     return INVENTORY
@@ -71,7 +71,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store_name = context.user_data.get("store_name")
     inventory_data = context.user_data.get("inventory_data")
 
-    # Save to Supabase stores table
     if supabase:
         try:
             res = supabase.table("stores").insert({
@@ -83,30 +82,43 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }).execute()
             
             store_id = res.data[0]["id"]
-            
-            # Automatically set webhook for the merchant's new bot pointing to our dynamic dispatcher
             webhook_url = f"{RENDER_EXTERNAL_URL}/webhook/{store_id}"
+            
             async with httpx.AsyncClient() as client:
                 await client.get(f"https://api.telegram.org/bot{bot_token}/setWebhook?url={webhook_url}")
+                me_response = await client.get(f"https://api.telegram.org/bot{bot_token}/getMe")
+                bot_info = me_response.json()
+                
+            bot_username = bot_info.get("result", {}).get("username", "")
+            bot_link = f"https://t.me/{bot_username}" if bot_username else "Your Custom Bot"
+            qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={bot_link}"
 
             success_message = (
-                f"🎉 Congratulations! Your store *{store_name}* has been successfully registered on Nexa AI.\n\n"
-                "Your automated AI receptionist is now fully configured with your inventory data and linked to your custom bot. "
-                "You may now message your new store bot directly on Telegram!"
+                f"🎉 *Congratulations! Your store {store_name} is officially live on Nexa AI!*\n\n"
+                f"🤖 *Bot Handle:* @{bot_username}\n"
+                f"🔗 *Direct Link:* {bot_link}\n\n"
+                "⚡ *Live Feature Enabled:* Whenever a customer asks to buy or order, you will instantly receive a notification right here in Telegram!"
             )
+            
+            await update.message.reply_text(success_message, parse_mode="Markdown")
+            if bot_username:
+                await update.message.reply_photo(
+                    photo=qr_code_url,
+                    caption=f"📱 *Scan QR Code to launch @{bot_username}*",
+                    parse_mode="Markdown"
+                )
         except Exception as e:
-            success_message = f"We encountered an issue saving your store credentials. Please check if this bot token is valid/unique. (Error: {str(e)})"
+            await update.message.reply_text(f"Error registering store bot: {str(e)}")
     else:
-        success_message = "Database connection is currently inactive. Please verify Supabase configuration."
+        await update.message.reply_text("Database connection inactive.")
 
-    await update.message.reply_text(success_message, parse_mode="Markdown")
     return ConversationHandler.END
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Registration process has been cancelled. You can restart anytime using /register.")
+    await update.message.reply_text("Registration cancelled. Type /register to restart.")
     return ConversationHandler.END
 
-# General message handler for Master Bot (/start and general queries)
+# Master bot fallback handler
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -126,7 +138,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
             pass
     await update.message.reply_text(response_text)
 
-# Set up Conversation Handler for Onboarding
 onboarding_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
@@ -137,7 +148,6 @@ onboarding_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
 
-# Register Handlers on Master Bot
 telegram_app.add_handler(onboarding_handler)
 telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
@@ -146,6 +156,17 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 async def startup_event():
     await telegram_app.initialize()
     await telegram_app.start()
+    
+    # Auto-resync webhooks on server boot
+    if supabase:
+        try:
+            stores = supabase.table("stores").select("id, bot_token").eq("is_active", True).execute()
+            async with httpx.AsyncClient() as client:
+                for store in stores.data:
+                    w_url = f"{RENDER_EXTERNAL_URL}/webhook/{store['id']}"
+                    await client.get(f"https://api.telegram.org/bot{store['bot_token']}/setWebhook?url={w_url}")
+        except Exception as e:
+            print(f"Startup resync warning: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -155,7 +176,6 @@ async def shutdown_event():
 def home():
     return {"status": "Nexa AI SaaS Multi-Tenant Platform is fully operational."}
 
-# Master Bot Webhook Endpoint
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -163,15 +183,14 @@ async def telegram_webhook(request: Request):
     await telegram_app.process_update(update)
     return {"ok": True}
 
-# --- DYNAMIC MULTI-TENANT STORE BOT DISPATCHER ---
+# --- DYNAMIC MULTI-TENANT DISPATCHER ---
 @app.post("/webhook/{store_id}")
 async def dynamic_store_webhook(store_id: str, request: Request):
     data = await request.json()
-    
     if not supabase:
         return {"ok": False, "error": "Database offline"}
 
-    # 1. Fetch store details from Supabase using store_id
+    # Fetch store
     store_res = supabase.table("stores").select("*").eq("id", store_id).execute()
     if not store_res.data:
         return {"ok": False, "error": "Store not found"}
@@ -180,45 +199,58 @@ async def dynamic_store_webhook(store_id: str, request: Request):
     bot_token = store["bot_token"]
     store_name = store["store_name"]
     inventory_data = store["inventory_data"]
+    owner_telegram_id = store.get("owner_telegram_id")
 
-    # 2. Extract customer message from incoming Telegram update
     message = data.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
+    chat_id = message.get("chat", {}) .get("id")
     user_text = message.get("text")
+    username = message.get("from", {}).get("username", "Unknown User")
+    first_name = message.get("from", {}).get("first_name", "Customer")
 
     if not chat_id or not user_text:
         return {"ok": True}
 
-    # 3. Generate customized AI response using Groq with the merchant's exact inventory
+    # Fetch last 3 previous interactions for conversation context
+    history_messages = []
+    try:
+        chat_history = supabase.table("chats").select("user_message, bot_response").eq("user_id", str(chat_id)).order("created_at", desc=True).limit(3).execute()
+        for item in reversed(chat_history.data):
+            history_messages.append({"role": "user", "content": item["user_message"]})
+            history_messages.append({"role": "assistant", "content": item["bot_response"]})
+    except Exception:
+        pass
+
+    # Build prompt messages
+    system_prompt = (
+        f"You are the elite, helpful AI receptionist for {store_name}.\n\n"
+        f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
+        "STRICT GROUNDING RULES:\n"
+        "1. Answer strictly using the inventory and contact details provided.\n"
+        "2. NEVER invent phone numbers, addresses, or unlisted prices.\n"
+        "3. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified to complete the sale."
+    )
+    
+    messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
+
     response_text = f"Welcome to {store_name}. How may we assist you today?"
     if groq_client:
         try:
             completion = groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"You are the elite, world-class AI customer service receptionist for {store_name}. "
-                            f"Here is your exact store inventory and stock data provided by the owner: {inventory_data}. "
-                            "Answer customer inquiries strictly and accurately based on this inventory data with impeccable executive polish, politeness, and speed."
-                        ),
-                    },
-                    {"role": "user", "content": user_text},
-                ],
+                messages=messages_payload,
                 model="openai/gpt-oss-120b",
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
-            response_text = f"We appreciate your patience while we process your request. (Notice: {str(e)})"
+            response_text = f"Thank you for contacting {store_name}. We are processing your request. ({str(e)})"
 
-    # 4. Reply back to the customer using the merchant's unique bot token via Telegram API
+    # Send response to customer
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={"chat_id": chat_id, "text": response_text}
         )
 
-    # 5. Log chat to database
+    # Save to chat log
     try:
         supabase.table("chats").insert({
             "user_id": str(chat_id),
@@ -227,5 +259,22 @@ async def dynamic_store_webhook(store_id: str, request: Request):
         }).execute()
     except Exception:
         pass
+
+    # INSTANT LEAD NOTIFICATION TO STORE OWNER
+    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone"]
+    if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id:
+        customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
+        alert_msg = (
+            f"🚨 *NEW HIGH-INTENT LEAD for {store_name}!*\n\n"
+            f"👤 *Customer:* {first_name} ({customer_handle})\n"
+            f"💬 *Inquiry:* \"{user_text}\"\n\n"
+            f"🤖 *AI Receptionist Replied:* \"{response_text[:150]}...\"\n\n"
+            f"👉 *Action:* Reach out directly to close the sale!"
+        )
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": owner_telegram_id, "text": alert_msg, "parse_mode": "Markdown"}
+            )
 
     return {"ok": True}
