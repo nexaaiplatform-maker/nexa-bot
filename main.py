@@ -162,7 +162,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("Registration cancelled. Type /register to restart.")
     return ConversationHandler.END
 
-# Master bot message handler
+# Master bot message handler (Locked strictly to Nexa AI Platform onboarding)
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -172,7 +172,10 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             completion = groq_client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are Nexa AI, an elite executive concierge platform."},
+                    {
+                        "role": "system", 
+                        "content": "You are Nexa AI, the master platform that helps merchants create their own automated AI store receptionists. Your only job is to guide users to use the /register command to set up their shop bot. Do not answer general knowledge questions or act as a general assistant."
+                    },
                     {"role": "user", "content": user_text}
                 ],
                 model="openai/gpt-oss-120b",
