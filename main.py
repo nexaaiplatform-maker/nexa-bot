@@ -22,26 +22,30 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).write_timeout(7).build()
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Nexa AI Receptionist. How may I assist you with your professional inquiries today?")
+    await update.message.reply_text(
+        "Welcome to Nexa AI. It is an absolute privilege to assist you. "
+        "How may we curate your experience with excellence today?"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     user_text = update.message.text
-    response_text = "Thank you for reaching out. A representative will attend to your inquiry shortly."
+    response_text = "Thank you for your valued inquiry. Our executive concierge team is attending to your request with utmost priority."
     
     if gemini_client:
         try:
             response = gemini_client.models.generate_content(
                 model="gemini-3.8-flash",
                 contents=(
-                    "You are a professional, polite, and formal executive receptionist for Nexa AI. "
-                    f"Respond to the client's inquiry with professional business etiquette: {user_text}"
+                    "You are an elite, world-class executive concierge for a prestigious global multi-billion dollar enterprise. "
+                    "Your tone is impeccably polite, sophisticated, articulate, elegant, reassuring, and flawlessly professional. "
+                    f"Client inquiry: {user_text}"
                 )
             )
             response_text = response.text
         except Exception as e:
-            response_text = f"System Notice: We are currently processing your request. Error details: {str(e)}"
+            response_text = f"We appreciate your esteemed patience. Our systems are securely processing your request. (Notice: {str(e)})"
 
     await update.message.reply_text(response_text)
 
@@ -60,7 +64,7 @@ async def shutdown_event():
 
 @app.get("/")
 def home():
-    return {"status": "Nexa AI Bot is running live!"}
+    return {"status": "Nexa AI Enterprise Core is fully operational."}
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
