@@ -37,9 +37,40 @@ STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "Welcome to Nexa AI Enterprise Platform. It is an absolute privilege to assist you.\n\n"
-        "To launch your own custom AI-powered store receptionist (like BotFather), please use the command /register."
+        "Commands:\n"
+        "• Use /register to launch your custom AI store receptionist.\n"
+        "• Use /update <new inventory> to update your store inventory live."
     )
     await update.message.reply_text(welcome_text)
+
+# --- Live Inventory Update Handler ---
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.message.from_user.id)
+    new_inventory = " ".join(context.args).strip()
+
+    if not new_inventory:
+        await update.message.reply_text(
+            "⚠️ *Please provide your new inventory details after the command.*\n\n"
+            "Example:\n`/update Item 1: Nike Air Max - $90 (5 left)\nItem 2: Jordan 4 - $120`",
+            parse_mode="Markdown"
+        )
+        return
+
+    if not supabase:
+        await update.message.reply_text("Database connection inactive.")
+        return
+
+    try:
+        res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
+        if res.data:
+            await update.message.reply_text(
+                "✅ *Inventory Updated Live!*\n\nYour AI receptionist will now use these updated stock and pricing details immediately.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("⚠️ No active store found associated with your Telegram account. Please use /register first.")
+    except Exception as e:
+        await update.message.reply_text(f"Failed to update inventory: {str(e)}")
 
 # --- Onboarding Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,7 +164,8 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🤖 *Bot Handle:* @{bot_username}\n"
                 f"🎨 *Active Theme Style:* {ui_theme.upper()}\n"
                 f"🔗 *Direct Link:* {bot_link}\n\n"
-                "⚡ *Live Lead Alert:* Whenever a customer asks to buy or order, you will instantly receive a notification right here in Telegram!"
+                "⚡ *Live Lead Alert:* Whenever a customer asks to buy or order, you will instantly receive a notification right here in Telegram!\n"
+                "📝 *Live Update:* Send `/update <new inventory>` here anytime to update your stock instantly."
             )
             
             await update.message.reply_text(success_message, parse_mode="Markdown")
@@ -174,7 +206,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are Nexa AI, the master platform that helps merchants create their own automated AI store receptionists. Your only job is to guide users to use the /register command to set up their shop bot. Do not answer general knowledge questions or act as a general assistant."
+                        "content": "You are Nexa AI, the master platform that helps merchants create their own automated AI store receptionists. Your only job is to guide users to use the /register command to set up their shop bot or /update to change stock. Do not answer general knowledge questions or act as a general assistant."
                     },
                     {"role": "user", "content": user_text}
                 ],
@@ -198,6 +230,7 @@ onboarding_handler = ConversationHandler(
 
 telegram_app.add_handler(onboarding_handler)
 telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
 
 @app.on_event("startup")
