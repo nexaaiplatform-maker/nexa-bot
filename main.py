@@ -41,41 +41,68 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).w
 
 # Onboarding Conversation States
 STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
-
-# In-Memory Tracking for Subscriptions, Trials & Transactions
-user_subscriptions = {}
 pending_orders = {}
 transaction_history = [] 
 
 
 # -------------------------------------------------------------------
-# Core Logic: Trial & Credit Verification Engine
+# Core Logic: Persistent Trial & Credit Engine (Supabase Backed)
 # -------------------------------------------------------------------
-def check_or_create_trial(user_id: int) -> dict:
-    """Grants a 3-day trial with 50 AI generation credits upon first start."""
+def get_or_create_user_subscription(user_id: int) -> dict:
+    """Retrieves or creates a 3-day trial with 50 credits stored permanently in Supabase."""
     now = datetime.now()
-    if user_id not in user_subscriptions:
-        user_subscriptions[user_id] = {
-            "trial_expires": now + timedelta(days=3),
-            "credits_remaining": 50,
-            "is_pro": False
-        }
-    return user_subscriptions[user_id]
+    if supabase:
+        try:
+            res = supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
+            if res.data:
+                sub = res.data[0]
+                return {
+                    "trial_expires": datetime.fromisoformat(sub["trial_expires"]),
+                    "credits_remaining": sub["credits_remaining"],
+                    "is_pro": sub["is_pro"]
+                }
+        except Exception:
+            pass
+
+    # Default fallback data if database lookup fails
+    default_sub = {
+        "trial_expires": now + timedelta(days=3),
+        "credits_remaining": 50,
+        "is_pro": False
+    }
+    
+    if supabase:
+        try:
+            supabase.table("subscriptions").upsert({
+                "user_id": str(user_id),
+                "trial_expires": default_sub["trial_expires"].isoformat(),
+                "credits_remaining": 50,
+                "is_pro": False
+            }).execute()
+        except Exception:
+            pass
+            
+    return default_sub
 
 
 def verify_active_access(user_id: int) -> bool:
-    """Checks if user has active Pro status or is within their 3-day trial with credits."""
-    user = user_subscriptions.get(user_id)
-    if not user:
-        return False
-        
-    if user["is_pro"]:
+    sub = get_or_create_user_subscription(user_id)
+    if sub["is_pro"]:
         return True
-        
-    if datetime.now() < user["trial_expires"] and user["credits_remaining"] > 0:
+    if datetime.now() < sub["trial_expires"] and sub["credits_remaining"] > 0:
         return True
-        
     return False
+
+
+def deduct_credit(user_id: int):
+    sub = get_or_create_user_subscription(user_id)
+    if not sub["is_pro"]:
+        new_credits = max(0, sub["credits_remaining"] - 1)
+        if supabase:
+            try:
+                supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
+            except Exception:
+                pass
 
 
 # -------------------------------------------------------------------
@@ -99,13 +126,13 @@ def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tup
 
 
 # -------------------------------------------------------------------
-# Telegram Bot Handlers & Commands
+# Telegram Master Bot Handlers & Commands
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     
-    sub_data = check_or_create_trial(user_id)
+    sub_data = get_or_create_user_subscription(user_id)
     has_access = verify_active_access(user_id)
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
@@ -201,6 +228,8 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- Onboarding Conversation Handlers ---
+STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
+
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Nexa AI Merchant Onboarding Suite.\n\n"
@@ -230,7 +259,6 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles button clicks or typed text for theme selection seamlessly."""
     chosen_theme = "executive"
     
     if update.callback_query:
@@ -284,6 +312,12 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ui_theme = context.user_data.get("ui_theme", "executive")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified.")
 
+    # 1. Register Webhook for the new Tenant Bot Token with Telegram
+    tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
+    async with httpx.AsyncClient() as client:
+        await client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": tenant_webhook_url})
+
+    # 2. Save Store in Supabase
     if supabase:
         try:
             supabase.table("stores").insert({
@@ -352,7 +386,6 @@ conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
         STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
-        # Seamlessly accept either a button click OR typed text for theme selection!
         UI_THEME: [
             CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
@@ -372,14 +405,29 @@ telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
 # -------------------------------------------------------------------
-# FastAPI Webhook Lifecycle & Endpoints
+# FastAPI Webhook Lifecycle & Automatic Tenant Webhook Sync
 # -------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
+    """Sets master webhook and auto-registers all tenant store bot webhooks from Supabase."""
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=webhook_url)
+
+    # Automatically re-sync webhooks for all existing registered tenant bots in Supabase
+    if supabase:
+        try:
+            stores_res = supabase.table("stores").select("bot_token").execute()
+            if stores_res.data:
+                async with httpx.AsyncClient() as client:
+                    for store in stores_res.data:
+                        t_token = store.get("bot_token")
+                        if t_token:
+                            t_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{t_token}"
+                            await client.post(f"https://api.telegram.org/bot{t_token}/setWebhook", json={"url": t_url})
+        except Exception:
+            pass
 
 
 @app.on_event("shutdown")
@@ -393,6 +441,52 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
+
+
+@app.post("/tenant-webhook/{bot_token}")
+async def tenant_bot_webhook(bot_token: str, request: Request):
+    """Receives updates sent directly to registered child bots (e.g. Abebe shoe bot)."""
+    data = await request.json()
+    message = data.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    user_text = message.get("text", "")
+    from_user = message.get("from", {})
+    username = from_user.get("username", "Unknown User")
+    first_name = from_user.get("first_name", "Customer")
+    
+    if not chat_id or not user_text:
+        return {"ok": True}
+
+    # Fetch store configuration from Supabase using bot_token
+    store = None
+    if supabase:
+        res = supabase.table("stores").select("*").eq("bot_token", bot_token).execute()
+        if res.data:
+            store = res.data[0]
+
+    if not store:
+        async with httpx.AsyncClient() as client:
+            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id, 
+                "text": "Store configuration not found. Please complete onboarding."
+            })
+        return {"ok": True}
+
+    # Route request to Store Chat processor
+    payload = {
+        "chat_id": chat_id,
+        "user_text": user_text,
+        "bot_token": bot_token,
+        "store_name": store.get("store_name", "Our Store"),
+        "ui_theme": store.get("ui_theme", "executive"),
+        "inventory_data": store.get("inventory_data", ""),
+        "owner_telegram_id": store.get("owner_telegram_id"),
+        "username": username,
+        "first_name": first_name,
+        "history_messages": []
+    }
+    
+    return await store_chat_webhook(payload)
 
 
 @app.post("/api/store-chat")
@@ -433,9 +527,9 @@ async def store_chat_webhook(payload: dict):
         f"{selected_persona}\n\n"
         f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
         "STRICT GROUNDING RULES:\n"
-        "1. Answer strictly using the inventory and contact details provided above.\n"
+        "1. Answer strictly and accurately using the inventory and store details provided above.\n"
         "2. NEVER invent phone numbers, addresses, or unlisted prices.\n"
-        "3. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified to complete the sale."
+        "3. If a customer asks about a product, check the inventory details above and give a precise answer regarding availability, pricing, and sizing."
     )
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
