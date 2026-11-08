@@ -138,24 +138,30 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
-        status_text = "⭐ *Pro Member (Unlimited Access)*"
+        status_text = "⭐ *Pro Member — Unlimited 24/7 Sales Machine Active*"
     elif has_access:
-        status_text = f"🎁 *Free Trial Active*\n• *Expires:* `{expires_str}`\n• *Credits Remaining:* `{sub_data['credits_remaining']}`"
+        status_text = (
+            f"🔥 *Free Trial Active (Don't Miss Out!)*\n"
+            f"• *Expires:* `{expires_str}`\n"
+            f"• *AI Credits Left:* `{sub_data['credits_remaining']}`\n"
+            f"⚡ *Tip:* Every unanswered customer message is a lost sale. Deploy your store now!"
+        )
     else:
-        status_text = "⚠️ *Trial Expired* — Upgrade to Pro to unlock unlimited AI receptionist features."
+        status_text = "⚠️ *Trial Expired* — Upgrade to Pro immediately to prevent your store bot from pausing customer sales."
 
     welcome_text = (
-        f"Welcome to Nexa AI Enterprise Platform, *{user.first_name}*.\n\n"
-        f"📊 *Account Status:*\n{status_text}\n\n"
-        "Commands:\n"
-        "• Use /register to launch your custom AI store receptionist.\n"
-        "• Use /update <new inventory> to update your store inventory live.\n"
-        "• Use /upgrade to purchase your $50 Pro License."
+        f"🚀 *Welcome to Nexa AI Enterprise Platform, {user.first_name}!*\n\n"
+        f"You are 2 minutes away from deploying a tireless AI sales receptionist that closes deals, answers questions in any language, and texts you instant high-intent buyer leads 24/7.\n\n"
+        f"📊 *Your Account Status:*\n{status_text}\n\n"
+        "🎯 **Quick Start Guide:**\n"
+        "1️⃣ Type /register to launch your custom AI store bot.\n"
+        "2️⃣ Type `/update <your inventory>` anytime to change prices or stock instantly.\n"
+        "3️⃣ Type /upgrade to unlock unlimited Pro power."
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 Upgrade to Pro ($50.00)", callback_data="buy_pro")],
-        [InlineKeyboardButton("💎 Register AI Store", callback_data="start_register")]
+        [InlineKeyboardButton("🚀 Unlock Pro Status ($50.00)", callback_data="buy_pro")],
+        [InlineKeyboardButton("💎 Launch AI Store Now (/register)", callback_data="start_register")]
     ]
     await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -178,22 +184,23 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     invoice_text = (
-        f"🧾 *NEXA AI OFFICIAL INVOICE*\n"
+        f"🧾 *NEXA AI SECURE PRO INVOICE*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• *Invoice ID:* `{order_id}`\n"
-        f"• *Item:* Pro Bot License (Monthly)\n"
-        f"• *Exact Amount:* `${exact_amount} USD`\n"
-        f"• *Routed Payout Rail:* `{channel_name}`\n"
+        f"• *Item:* Unlimited Pro License (Monthly)\n"
+        f"• *Exact Transfer Amount:* `${exact_amount} USD`\n"
+        f"• *Secure Payout Rail:* `{channel_name}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚠️ *Payment Instructions:*\n"
-        f"1. Click the button below to open Remitly.\n"
-        f"2. Send **exactly `${exact_amount}`** to ensure instant matching.\n"
-        f"3. Upload your payment screenshot here when complete."
+        f"🚨 **CRITICAL INSTRUCTIONS FOR INSTANT ACTIVATION:**\n"
+        f"1. Click the payment button below to open Remitly.\n"
+        f"2. Send **EXACTLY `${exact_amount}`** (the unique cents guarantee instant automated verification).\n"
+        f"3. Take a screenshot of your successful transfer receipt.\n"
+        f"4. Send the screenshot right here in this chat to activate instantly."
     )
     
     keyboard = [
         [InlineKeyboardButton(f"💳 Pay ${exact_amount} via Remitly", url=remitly_url)],
-        [InlineKeyboardButton("✅ I Have Paid (Upload Receipt)", callback_data="upload_receipt")]
+        [InlineKeyboardButton("✅ I Have Paid — Upload Receipt", callback_data="upload_receipt")]
     ]
     
     await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -205,8 +212,10 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.message.reply_text(
-            "⚠️ *Please provide your new inventory details after the command.*\n\n"
-            "Example:\n`/update Item 1: Nike Air Max - $90 (5 left)\nItem 2: Jordan 4 - $120`",
+            "⚠️ *How to update your inventory live:*\n\n"
+            "Type `/update` followed by your items, prices, and stock.\n\n"
+            "*Example:* \n"
+            "`/update Item 1: Nike Air Max - $110 (8 left)\nItem 2: Jordan 4 - $160 (3 left)`",
             parse_mode="Markdown"
         )
         return
@@ -219,11 +228,11 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
         if res.data:
             await update.message.reply_text(
-                "✅ *Inventory Updated Live!*\n\nYour AI receptionist will now use these updated stock and pricing details immediately.",
+                "✅ *Inventory Updated Live Across All Channels!*\n\nYour AI receptionist is now selling with your updated pricing and stock numbers immediately.",
                 parse_mode="Markdown"
             )
         else:
-            await update.message.reply_text("⚠️ No active store found associated with your Telegram account. Please use /register first.")
+            await update.message.reply_text("⚠️ No active store found for your account. Please use /register first.")
     except Exception as e:
         await update.message.reply_text(f"Failed to update inventory: {str(e)}")
 
@@ -231,8 +240,9 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Welcome to the Nexa AI Merchant Onboarding Suite.\n\n"
-        "Let us begin. What is the official name of your boutique or store?"
+        "💎 *NEXA AI STORE BUILDER WIZARD*\n\n"
+        "Let's create your automated sales bot in 3 simple steps.\n\n"
+        "**Step 1 of 3:** What is the official name of your business, boutique, or store? (e.g. *Abebe Shoes*)"
     )
     return STORE_NAME
 
@@ -241,16 +251,16 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["store_name"] = update.message.text
     
     keyboard = [
-        [InlineKeyboardButton("💎 Luxury Executive (VIP Concierge)", callback_data="theme_executive")],
-        [InlineKeyboardButton("⚡ High-Energy Sales (Fast Closer)", callback_data="theme_sales")],
+        [InlineKeyboardButton("💎 Luxury Executive (Elite & Refined)", callback_data="theme_executive")],
+        [InlineKeyboardButton("⚡ High-Energy Sales (Aggressive Closer)", callback_data="theme_sales")],
         [InlineKeyboardButton("🌿 Friendly Advisor (Warm & Helpful)", callback_data="theme_friendly")],
         [InlineKeyboardButton("🎯 Direct Minimalist (Short & Precise)", callback_data="theme_minimalist")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"Exquisite choice: *{update.message.text}*.\n\n"
-        "Now select the **AI Assistant Persona & Response Style** for your shop's bot (tap a button or type your choice):",
+        f"Great choice: *{update.message.text}*.\n\n"
+        "**Step 2 of 3:** Choose how your AI assistant should talk to customers:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -287,8 +297,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     await target_message(
-        f"Selected Style: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
-        "Now, please provide your complete inventory list, stock details, contact info, and pricing so our AI can curate accurate customer responses for you:",
+        f"Selected Persona: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
+        "**Step 3 of 3:** Paste your complete inventory list, prices, sizes, stock count, and location details below so the AI knows what to sell:",
         parse_mode="Markdown"
     )
     return INVENTORY
@@ -297,7 +307,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.message.text
     await update.message.reply_text(
-        "Splendid. Finally, please create a bot via Telegram's official @BotFather, retrieve your unique **Bot Token**, and paste it here:",
+        "Almost done! \n\n"
+        "Go to Telegram's official **@BotFather**, create a new bot (`/newbot`), copy your unique **Bot Token**, and paste it right here:",
         parse_mode="Markdown"
     )
     return BOT_TOKEN
@@ -328,18 +339,18 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ Warning saving store to database: {str(e)}")
 
     success_msg = (
-        f"🎉 *Store Successfully Registered & AI Deployed!*\n\n"
+        f"🎉 *CONGRATULATIONS! YOUR AI STORE IS LIVE!* 🚀\n\n"
         f"• *Store Name:* {store_name}\n"
-        f"• *Persona:* {ui_theme.capitalize()}\n"
-        f"• *Bot Token Linked:* Secured ✅\n\n"
-        "Your custom AI receptionist is now live and ready to serve customers!"
+        f"• *Sales Persona:* {ui_theme.capitalize()}\n"
+        f"• *Webhook Status:* Connected & Active ✅\n\n"
+        "Your bot is now ready to receive customers, answer questions in any language, and notify you instantly whenever someone wants to buy!"
     )
     await update.message.reply_text(success_msg, parse_mode="Markdown")
     return ConversationHandler.END
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Store registration cancelled.")
+    await update.message.reply_text("❌ Store registration cancelled. Type /register whenever you are ready.")
     return ConversationHandler.END
 
 
@@ -351,9 +362,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "buy_pro":
         await upgrade_command(update, context)
     elif query.data == "start_register":
-        await query.message.reply_text("Please use the /register command to launch store onboarding.")
+        await query.message.reply_text("Please use the /register command to begin onboarding your store.")
     elif query.data == "upload_receipt":
-        await query.message.reply_text("📸 Please send a screenshot or photo of your Remitly payment receipt.")
+        await query.message.reply_text("📸 Please upload your payment screenshot now. Our Vision OCR will verify it in seconds!")
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,20 +372,18 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     order = pending_orders.get(user_id)
     
     if not order:
-        await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate an invoice.")
+        await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure invoice first.")
         return
 
-    # Download receipt image bytes from Telegram
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     
-    expected_amount = order["amount"] # e.g. "50.22"
+    expected_amount = order["amount"]
     expected_channel = order["channel"]
     
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None}
 
-    # Groq Vision OCR Analysis
     if groq_client:
         try:
             prompt = (
@@ -402,14 +411,13 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     ref_id = parsed_result.get("reference_id")
     detected_amount = str(parsed_result.get("detected_amount", ""))
 
-    # Anti-Replay Guard: Check if reference ID was already used
     if ref_id and supabase:
         try:
             existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
             if existing_tx.data:
                 await update.message.reply_text(
-                    f"🚫 *RECEIPT REUSE DETECTED!*\n\n"
-                    f"Transaction ID `{ref_id}` has already been redeemed for an active subscription.",
+                    f"🚫 *SECURITY ALERT: RECEIPT REUSE DETECTED!*\n\n"
+                    f"Transaction ID `{ref_id}` has already been redeemed previously. Duplicate receipts are blocked.",
                     parse_mode="Markdown"
                 )
                 return
@@ -421,7 +429,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if parsed_result.get("valid") and amount_matches and ref_id:
         if supabase:
             try:
-                # Save transaction ID to processed_receipts table to block double-redemptions
                 supabase.table("processed_receipts").insert({
                     "user_id": str(user_id),
                     "order_id": order["order_id"],
@@ -431,7 +438,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     "created_at": datetime.now().isoformat()
                 }).execute()
 
-                # Activate Pro Access in Supabase
                 supabase.table("subscriptions").upsert({
                     "user_id": str(user_id),
                     "is_pro": True,
@@ -441,21 +447,20 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 pass
 
         await update.message.reply_text(
-            f"✅ *PAYMENT VERIFIED INSTANTLY!*\n\n"
+            f"✅ *PAYMENT VERIFIED & PRO UNLOCKED!* ⭐\n\n"
             f"• *Invoice ID:* `{order['order_id']}`\n"
-            f"• *Ref / TransID:* `{ref_id}`\n"
-            f"• *Verified Amount:* `${expected_amount}`\n"
-            f"• *Status:* ⭐ **Pro Activated (Unlimited Access)**\n\n"
-            f"Your account and custom store receptionists are unlocked!",
+            f"• *Ref ID:* `{ref_id}`\n"
+            f"• *Status:* Unlimited Pro Access Active\n\n"
+            f"Your store is fully upgraded!",
             parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
-            f"📥 *Receipt Logged for Manual Review*\n\n"
+            f"📥 *Receipt Logged for Manual Admin Review*\n\n"
             f"• *Invoice ID:* `{order['order_id']}`\n"
             f"• *Expected Amount:* `${expected_amount}`\n"
             f"• *Detected Ref ID:* `{ref_id or 'Pending...'}`\n\n"
-            f"Automated Vision OCR requires a clear screenshot showing the exact amount `${expected_amount}` and reference number. An admin has been notified.",
+            f"Vision OCR could not auto-verify this screenshot. An admin has been alerted to manually check your bank deposit.",
             parse_mode="Markdown"
         )
 
@@ -545,7 +550,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id, 
-                "text": "Store configuration not found. Please complete onboarding."
+                "text": "Store configuration not found. Please complete onboarding on the master bot."
             })
         return {"ok": True}
 
@@ -578,7 +583,6 @@ async def store_chat_webhook(payload: dict):
     first_name = payload.get("first_name", "Customer")
     history_messages = payload.get("history_messages", [])
 
-    # Check Trial & Credits for Owner
     if owner_telegram_id:
         owner_id_int = int(owner_telegram_id)
         get_or_create_user_subscription(owner_id_int)
@@ -598,7 +602,7 @@ async def store_chat_webhook(payload: dict):
         ),
         "sales": (
             f"You are the top sales representative for {store_name}. "
-            "Maintain an enthusiastic, high-energy tone that creates excitement around the products and encourages closing sales quickly."
+            "Maintain an enthusiastic, high-energy tone that creates excitement around products and closes sales quickly."
         ),
         "friendly": (
             f"You are a friendly, warm, and welcoming local shop assistant for {store_name}. "
@@ -615,10 +619,11 @@ async def store_chat_webhook(payload: dict):
     system_prompt = (
         f"{selected_persona}\n\n"
         f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
-        "STRICT GROUNDING RULES:\n"
-        "1. Answer strictly using the inventory and contact details provided above.\n"
-        "2. NEVER invent phone numbers, addresses, or unlisted prices.\n"
-        "3. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified to complete the sale."
+        "STRICT GROUNDING & MULTI-LANGUAGE RULES:\n"
+        "1. Automatically detect the language of the customer's message (e.g., English, Amharic, Afaan Oromo, etc.) and respond fluently in that exact same language.\n"
+        "2. Answer strictly using the inventory and contact details provided above.\n"
+        "3. NEVER invent phone numbers, addresses, or unlisted prices.\n"
+        "4. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified immediately to complete the sale."
     )
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
@@ -650,7 +655,7 @@ async def store_chat_webhook(payload: dict):
         except Exception:
             pass
 
-    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone"]
+    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone", "ግዛ", "ዋጋ", "ይግዙ"]
     if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
         customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
         alert_msg = (
@@ -666,4 +671,4 @@ async def store_chat_webhook(payload: dict):
                 json={"chat_id": owner_telegram_id, "text": alert_msg, "parse_mode": "Markdown"}
             )
 
-    return {"ok": True}
+    return {"ok": True}f
