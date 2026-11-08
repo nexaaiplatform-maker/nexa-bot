@@ -651,7 +651,7 @@ async def store_chat_webhook(payload: dict):
             pass
 
     lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone"]
-    if any(kw in user_text.lower() for kw in lead_keyword if kw in user_text.lower() for lead_keyword in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
+    if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
         customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
         alert_msg = (
             f"🚨 *NEW HIGH-INTENT LEAD for {store_name}!*\n\n"
