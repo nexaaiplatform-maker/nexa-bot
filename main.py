@@ -52,6 +52,14 @@ transaction_history = []
 
 
 # -------------------------------------------------------------------
+# Root Health Check (Crucial for UptimeRobot to prevent 502 Bad Gateway)
+# -------------------------------------------------------------------
+@app.get("/")
+async def root_health_check():
+    return {"status": "healthy", "service": "Nexa AI Bot is live and awake"}
+
+
+# -------------------------------------------------------------------
 # Core Logic: Persistent Trial & Credit Engine (Supabase Backed)
 # -------------------------------------------------------------------
 def get_or_create_user_subscription(user_id: int) -> dict:
