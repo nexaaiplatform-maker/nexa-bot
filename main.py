@@ -671,4 +671,4 @@ async def store_chat_webhook(payload: dict):
                 json={"chat_id": owner_telegram_id, "text": alert_msg, "parse_mode": "Markdown"}
             )
 
-    return {"ok": True}f
+    return {"ok": True}
