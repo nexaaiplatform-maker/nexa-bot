@@ -352,20 +352,27 @@ telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
 # -------------------------------------------------------------------
-# FastAPI Webhook Startup & Endpoints
+# FastAPI Webhook Lifecycle & Endpoints
 # -------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    """Automatically registers the Telegram webhook URL when Render launches the app."""
+    """Initializes and starts the Telegram application background worker, then sets the webhook URL."""
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
+    await telegram_app.start()  # <-- Starts the app background process to process updates
     await telegram_app.bot.set_webhook(url=webhook_url)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Gracefully stops the Telegram application worker on shutdown."""
+    await telegram_app.stop()
 
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
-    update = Update.de_json(data, telegram_app)
+    update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
 
