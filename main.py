@@ -5,7 +5,7 @@ import httpx
 import base64
 import json
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, status
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -30,6 +30,9 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.on
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Webhook Security Secret Token
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
 
 # Remitly Links for Dynamic Routing (Telebirr & Awash Bank)
 REMITLY_TELEBIRR_LINK = os.getenv("REMITLY_TELEBIRR_LINK", "https://remit.ly/pay/dawitandargachewb5917")
@@ -331,7 +334,10 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     async with httpx.AsyncClient() as client:
-        await client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": tenant_webhook_url})
+        await client.post(
+            f"https://api.telegram.org/bot{bot_token}/setWebhook", 
+            json={"url": tenant_webhook_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
+        )
 
     if supabase:
         try:
@@ -505,7 +511,7 @@ async def startup_event():
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
     await telegram_app.start() 
-    await telegram_app.bot.set_webhook(url=webhook_url)
+    await telegram_app.bot.set_webhook(url=webhook_url, secret_token=TELEGRAM_WEBHOOK_SECRET)
 
     if supabase:
         try:
@@ -517,7 +523,10 @@ async def startup_event():
                         t_token = store.get("bot_token")
                         if t_token:
                             t_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{t_token}"
-                            tasks.append(client.post(f"https://api.telegram.org/bot{t_token}/setWebhook", json={"url": t_url}))
+                            tasks.append(client.post(
+                                f"https://api.telegram.org/bot{t_token}/setWebhook", 
+                                json={"url": t_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
+                            ))
                     if tasks:
                         await asyncio.gather(*tasks, return_exceptions=True)
         except Exception:
@@ -531,6 +540,10 @@ async def shutdown_event():
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
+    secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret_header != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid secret token")
+
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
@@ -539,6 +552,10 @@ async def telegram_webhook(request: Request):
 
 @app.post("/tenant-webhook/{bot_token}")
 async def tenant_bot_webhook(bot_token: str, request: Request):
+    secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret_header != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid secret token")
+
     data = await request.json()
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
@@ -560,7 +577,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id, 
-                "text": "Store configuration not found. Please complete onboarding on the master bot."
+                "text": "Store configuration not found. Please complete onboarding on the main bot."
             })
         return {"ok": True}
 
@@ -643,7 +660,7 @@ async def store_chat_webhook(payload: dict):
         try:
             completion = groq_client.chat.completions.create(
                 messages=messages_payload,
-                model="openai/gpt-oss-120b",  # ✅ Correct active production model on Groq
+                model="openai/gpt-oss-120b",
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
