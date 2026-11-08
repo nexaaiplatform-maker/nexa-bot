@@ -222,7 +222,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await update.message.reply_text(
         f"Exquisite choice: *{update.message.text}*.\n\n"
-        "Now select the **AI Assistant Persona & Response Style** for your shop's bot:",
+        "Now select the **AI Assistant Persona & Response Style** for your shop's bot (tap a button or type your choice):",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -230,10 +230,26 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    """Handles button clicks or typed text for theme selection seamlessly."""
+    chosen_theme = "executive"
     
-    chosen_theme = query.data.replace("theme_", "")
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        chosen_theme = query.data.replace("theme_", "")
+        target_message = query.edit_message_text
+    else:
+        text = update.message.text.lower()
+        if "sales" in text:
+            chosen_theme = "sales"
+        elif "friendly" in text or "advisor" in text:
+            chosen_theme = "friendly"
+        elif "minimalist" in text:
+            chosen_theme = "minimalist"
+        else:
+            chosen_theme = "executive"
+        target_message = update.message.reply_text
+
     context.user_data["ui_theme"] = chosen_theme
     
     theme_labels = {
@@ -243,7 +259,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "minimalist": "🎯 Direct Minimalist"
     }
     
-    await query.edit_message_text(
+    await target_message(
         f"Selected Style: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
         "Now, please provide your complete inventory list, stock details, contact info, and pricing so our AI can curate accurate customer responses for you:",
         parse_mode="Markdown"
@@ -336,7 +352,11 @@ conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
         STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
-        UI_THEME: [CallbackQueryHandler(receive_ui_theme, pattern="^theme_")],
+        # Seamlessly accept either a button click OR typed text for theme selection!
+        UI_THEME: [
+            CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
+        ],
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
     },
@@ -356,16 +376,14 @@ telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 # -------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    """Initializes and starts the Telegram application background worker, then sets the webhook URL."""
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
-    await telegram_app.start()  # <-- Starts the app background process to process updates
+    await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=webhook_url)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Gracefully stops the Telegram application worker on shutdown."""
     await telegram_app.stop()
 
 
