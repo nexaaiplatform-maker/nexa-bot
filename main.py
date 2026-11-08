@@ -382,7 +382,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure invoice first.")
         return
 
-    # FIXED: Convert bytearray to bytes cleanly for base64 encoding
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
     base64_image = base64.b64encode(bytes(image_bytes)).decode('utf-8')
@@ -402,7 +401,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
             response = groq_client.chat.completions.create(
-                model="llama-3.2-11b-vision-instruct",  # FIXED: Updated to active vision model
+                model="llama-3.2-11b-vision-instruct",
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -508,7 +507,6 @@ async def startup_event():
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=webhook_url)
 
-    # FIXED: Use asyncio.gather() to register all tenant webhooks concurrently without blocking startup
     if supabase:
         try:
             stores_res = supabase.table("stores").select("bot_token").execute()
@@ -645,7 +643,7 @@ async def store_chat_webhook(payload: dict):
         try:
             completion = groq_client.chat.completions.create(
                 messages=messages_payload,
-                model="llama-3.3-70b-versatile",  # FIXED: Updated to active production text model
+                model="openai/gpt-oss-120b",  # ✅ Correct active production model on Groq
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
