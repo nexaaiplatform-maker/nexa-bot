@@ -48,6 +48,7 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).w
 # Onboarding Conversation States
 STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
 pending_orders = {}
+transaction_history = [] 
 
 
 # -------------------------------------------------------------------
@@ -115,18 +116,11 @@ def deduct_credit(user_id: int):
 def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tuple[str, str]:
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
-    telebirr_24h_total = 0.0
     
-    if supabase:
-        try:
-            res = supabase.table("processed_receipts").select("amount, channel, created_at").eq("channel", "Telebirr Mobile Wallet").execute()
-            if res.data:
-                for tx in res.data:
-                    tx_time = datetime.fromisoformat(tx["created_at"])
-                    if tx_time > twenty_four_hours_ago:
-                        telebirr_24h_total += float(tx["amount"]) * 130.0
-        except Exception:
-            pass
+    telebirr_24h_total = sum(
+        tx["amount_etb"] for tx in transaction_history 
+        if tx["destination"] == "TELEBIRR" and tx["timestamp"] > twenty_four_hours_ago
+    )
     
     SAFE_TELEBIRR_CAP = 20000.0 
     
@@ -577,7 +571,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id, 
-                "text": "Store configuration not found. Please complete onboarding on the main bot."
+                "text": "Store configuration not found. Please complete onboarding on the master bot."
             })
         return {"ok": True}
 
