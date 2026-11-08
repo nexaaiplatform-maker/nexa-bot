@@ -1,5 +1,6 @@
 import os
 import random
+import asyncio
 import httpx
 import base64
 import json
@@ -44,7 +45,6 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).w
 # Onboarding Conversation States
 STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
 pending_orders = {}
-transaction_history = [] 
 
 
 # -------------------------------------------------------------------
@@ -112,11 +112,18 @@ def deduct_credit(user_id: int):
 def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tuple[str, str]:
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
+    telebirr_24h_total = 0.0
     
-    telebirr_24h_total = sum(
-        tx["amount_etb"] for tx in transaction_history 
-        if tx["destination"] == "TELEBIRR" and tx["timestamp"] > twenty_four_hours_ago
-    )
+    if supabase:
+        try:
+            res = supabase.table("processed_receipts").select("amount, channel, created_at").eq("channel", "Telebirr Mobile Wallet").execute()
+            if res.data:
+                for tx in res.data:
+                    tx_time = datetime.fromisoformat(tx["created_at"])
+                    if tx_time > twenty_four_hours_ago:
+                        telebirr_24h_total += float(tx["amount"]) * 130.0
+        except Exception:
+            pass
     
     SAFE_TELEBIRR_CAP = 20000.0 
     
@@ -375,9 +382,10 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure invoice first.")
         return
 
+    # FIXED: Convert bytearray to bytes cleanly for base64 encoding
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    base64_image = base64.b64encode(bytes(image_bytes)).decode('utf-8')
     
     expected_amount = order["amount"]
     expected_channel = order["channel"]
@@ -394,7 +402,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
             response = groq_client.chat.completions.create(
-                model="llama-3.2-11b-vision-preview",
+                model="llama-3.2-11b-vision-instruct",  # FIXED: Updated to active vision model
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -405,8 +413,8 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 }]
             )
             parsed_result = json.loads(response.choices[0].message.content)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"OCR Error: {e}")
 
     ref_id = parsed_result.get("reference_id")
     detected_amount = str(parsed_result.get("detected_amount", ""))
@@ -500,16 +508,20 @@ async def startup_event():
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=webhook_url)
 
+    # FIXED: Use asyncio.gather() to register all tenant webhooks concurrently without blocking startup
     if supabase:
         try:
             stores_res = supabase.table("stores").select("bot_token").execute()
             if stores_res.data:
                 async with httpx.AsyncClient() as client:
+                    tasks = []
                     for store in stores_res.data:
                         t_token = store.get("bot_token")
                         if t_token:
                             t_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{t_token}"
-                            await client.post(f"https://api.telegram.org/bot{t_token}/setWebhook", json={"url": t_url})
+                            tasks.append(client.post(f"https://api.telegram.org/bot{t_token}/setWebhook", json={"url": t_url}))
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
         except Exception:
             pass
 
@@ -633,7 +645,7 @@ async def store_chat_webhook(payload: dict):
         try:
             completion = groq_client.chat.completions.create(
                 messages=messages_payload,
-                model="openai/gpt-oss-120b",
+                model="llama-3.3-70b-versatile",  # FIXED: Updated to active production text model
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
