@@ -82,10 +82,6 @@ def verify_active_access(user_id: int) -> bool:
 # Core Logic: Dynamic Volume Load Balancer (Telebirr vs. Awash)
 # -------------------------------------------------------------------
 def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tuple[str, str]:
-    """
-    Analyzes transactions in the past 24 hours to pick the safest receiving channel
-    and prevent personal account compliance flags.
-    """
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
     
@@ -175,7 +171,6 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
-# --- Live Inventory Update Handler ---
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.message.from_user.id)
     new_inventory = " ".join(context.args).strip()
@@ -205,7 +200,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Failed to update inventory: {str(e)}")
 
 
-# --- Onboarding Handlers ---
+# --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Nexa AI Merchant Onboarding Suite.\n\n"
@@ -296,6 +291,11 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Store registration cancelled.")
+    return ConversationHandler.END
+
+
 # --- Payment Button & Receipt Handlers ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -329,7 +329,39 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(confirmation_text, parse_mode="Markdown")
 
 
-# --- FastAPI Webhook Receiver ---
+# -------------------------------------------------------------------
+# Register Telegram Handlers & Conversation Handler
+# -------------------------------------------------------------------
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("register", register_start)],
+    states={
+        STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
+        UI_THEME: [CallbackQueryHandler(receive_ui_theme, pattern="^theme_")],
+        INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
+        BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel_registration)],
+)
+
+telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+telegram_app.add_handler(CommandHandler("update", update_command))
+telegram_app.add_handler(conv_handler)
+telegram_app.add_handler(CallbackQueryHandler(button_handler))
+telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+
+
+# -------------------------------------------------------------------
+# FastAPI Webhook Startup & Endpoints
+# -------------------------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    """Automatically registers the Telegram webhook URL when Render launches the app."""
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(url=webhook_url)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -340,7 +372,6 @@ async def telegram_webhook(request: Request):
 
 @app.post("/api/store-chat")
 async def store_chat_webhook(payload: dict):
-    """Processes customer inquiries for tenant store bots using Groq AI and sends lead notifications."""
     chat_id = payload.get("chat_id")
     user_text = payload.get("user_text", "")
     bot_token = payload.get("bot_token")
