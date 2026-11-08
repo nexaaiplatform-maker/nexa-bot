@@ -42,7 +42,7 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).w
 # Onboarding Conversation States
 STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
 
-# In-Memory Tracking for Subscriptions, Trials & Transactions (Sync with Supabase in production)
+# In-Memory Tracking for Subscriptions, Trials & Transactions
 user_subscriptions = {}
 pending_orders = {}
 transaction_history = [] 
@@ -89,13 +89,11 @@ def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tup
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
     
-    # Calculate 24-hour aggregate volume landing on Telebirr
     telebirr_24h_total = sum(
         tx["amount_etb"] for tx in transaction_history 
         if tx["destination"] == "TELEBIRR" and tx["timestamp"] > twenty_four_hours_ago
     )
     
-    # Safety Threshold: 20,000 ETB / day (~$150 USD)
     SAFE_TELEBIRR_CAP = 20000.0 
     
     if telebirr_24h_total + payment_amount_etb <= SAFE_TELEBIRR_CAP:
@@ -139,7 +137,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Triggers the secure Remitly checkout flow with unique cents and dynamic routing."""
     user_id = update.effective_user.id
     
     cents_offset = random.randint(10, 99)
@@ -276,7 +273,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ui_theme = context.user_data.get("ui_theme", "executive")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified.")
 
-    # Save Store to Supabase
     if supabase:
         try:
             supabase.table("stores").insert({
@@ -399,14 +395,12 @@ async def store_chat_webhook(payload: dict):
         except Exception as e:
             response_text = f"Thank you for contacting {store_name}. We are processing your request. ({str(e)})"
 
-    # Send response back to customer
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={"chat_id": chat_id, "text": response_text}
         )
 
-    # Save to database chat log
     if supabase:
         try:
             supabase.table("chats").insert({
@@ -417,7 +411,6 @@ async def store_chat_webhook(payload: dict):
         except Exception:
             pass
 
-    # INSTANT LEAD NOTIFICATION TO STORE OWNER
     lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone"]
     if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
         customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
