@@ -1,6 +1,8 @@
 import os
 import random
 import httpx
+import base64
+import json
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -64,7 +66,6 @@ def get_or_create_user_subscription(user_id: int) -> dict:
         except Exception:
             pass
 
-    # Default fallback data if database lookup fails
     default_sub = {
         "trial_expires": now + timedelta(days=3),
         "credits_remaining": 50,
@@ -228,8 +229,6 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- Onboarding Conversation Handlers ---
-STORE_NAME, UI_THEME, INVENTORY, BOT_TOKEN = range(4)
-
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Nexa AI Merchant Onboarding Suite.\n\n"
@@ -312,12 +311,10 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ui_theme = context.user_data.get("ui_theme", "executive")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified.")
 
-    # 1. Register Webhook for the new Tenant Bot Token with Telegram
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     async with httpx.AsyncClient() as client:
         await client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": tenant_webhook_url})
 
-    # 2. Save Store in Supabase
     if supabase:
         try:
             supabase.table("stores").insert({
@@ -346,7 +343,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
-# --- Payment Button & Receipt Handlers ---
+# --- Payment Button & Automated OCR Receipt Verification ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -367,16 +364,100 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate an invoice.")
         return
 
-    confirmation_text = (
-        f"📥 *Receipt Received!*\n\n"
-        f"• *Invoice ID:* `{order['order_id']}`\n"
-        f"• *Amount:* `${order['amount']}`\n"
-        f"• *Target Channel:* `{order['channel']}`\n"
-        f"• *Status:* Under Verification\n\n"
-        f"Your transfer is being matched against bank deposit alerts. "
-        f"Your Pro subscription will be activated automatically."
-    )
-    await update.message.reply_text(confirmation_text, parse_mode="Markdown")
+    # Download receipt image bytes from Telegram
+    photo_file = await update.message.photo[-1].get_file()
+    image_bytes = await photo_file.download_as_bytearray()
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    
+    expected_amount = order["amount"] # e.g. "50.22"
+    expected_channel = order["channel"]
+    
+    parsed_result = {"valid": False, "reference_id": None, "detected_amount": None}
+
+    # Groq Vision OCR Analysis
+    if groq_client:
+        try:
+            prompt = (
+                f"Analyze this payment receipt image. Extract:\n"
+                f"1. Transaction Reference ID or Confirmation Code\n"
+                f"2. Total Amount transferred\n"
+                f"Return strictly JSON format: "
+                f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
+            )
+            response = groq_client.chat.completions.create(
+                model="llama-3.2-11b-vision-preview",
+                response_format={"type": "json_object"},
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                }]
+            )
+            parsed_result = json.loads(response.choices[0].message.content)
+        except Exception:
+            pass
+
+    ref_id = parsed_result.get("reference_id")
+    detected_amount = str(parsed_result.get("detected_amount", ""))
+
+    # Anti-Replay Guard: Check if reference ID was already used
+    if ref_id and supabase:
+        try:
+            existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
+            if existing_tx.data:
+                await update.message.reply_text(
+                    f"🚫 *RECEIPT REUSE DETECTED!*\n\n"
+                    f"Transaction ID `{ref_id}` has already been redeemed for an active subscription.",
+                    parse_mode="Markdown"
+                )
+                return
+        except Exception:
+            pass
+
+    amount_matches = expected_amount in detected_amount or expected_amount.replace(".", "") in detected_amount
+
+    if parsed_result.get("valid") and amount_matches and ref_id:
+        if supabase:
+            try:
+                # Save transaction ID to processed_receipts table to block double-redemptions
+                supabase.table("processed_receipts").insert({
+                    "user_id": str(user_id),
+                    "order_id": order["order_id"],
+                    "reference_id": ref_id,
+                    "amount": expected_amount,
+                    "channel": expected_channel,
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+
+                # Activate Pro Access in Supabase
+                supabase.table("subscriptions").upsert({
+                    "user_id": str(user_id),
+                    "is_pro": True,
+                    "credits_remaining": 999999
+                }).execute()
+            except Exception:
+                pass
+
+        await update.message.reply_text(
+            f"✅ *PAYMENT VERIFIED INSTANTLY!*\n\n"
+            f"• *Invoice ID:* `{order['order_id']}`\n"
+            f"• *Ref / TransID:* `{ref_id}`\n"
+            f"• *Verified Amount:* `${expected_amount}`\n"
+            f"• *Status:* ⭐ **Pro Activated (Unlimited Access)**\n\n"
+            f"Your account and custom store receptionists are unlocked!",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            f"📥 *Receipt Logged for Manual Review*\n\n"
+            f"• *Invoice ID:* `{order['order_id']}`\n"
+            f"• *Expected Amount:* `${expected_amount}`\n"
+            f"• *Detected Ref ID:* `{ref_id or 'Pending...'}`\n\n"
+            f"Automated Vision OCR requires a clear screenshot showing the exact amount `${expected_amount}` and reference number. An admin has been notified.",
+            parse_mode="Markdown"
+        )
 
 
 # -------------------------------------------------------------------
@@ -405,17 +486,15 @@ telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
 # -------------------------------------------------------------------
-# FastAPI Webhook Lifecycle & Automatic Tenant Webhook Sync
+# FastAPI Webhook Lifecycle & Tenant Webhook Routing
 # -------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    """Sets master webhook and auto-registers all tenant store bot webhooks from Supabase."""
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=webhook_url)
 
-    # Automatically re-sync webhooks for all existing registered tenant bots in Supabase
     if supabase:
         try:
             stores_res = supabase.table("stores").select("bot_token").execute()
@@ -445,7 +524,6 @@ async def telegram_webhook(request: Request):
 
 @app.post("/tenant-webhook/{bot_token}")
 async def tenant_bot_webhook(bot_token: str, request: Request):
-    """Receives updates sent directly to registered child bots (e.g. Abebe shoe bot)."""
     data = await request.json()
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
@@ -457,7 +535,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if not chat_id or not user_text:
         return {"ok": True}
 
-    # Fetch store configuration from Supabase using bot_token
     store = None
     if supabase:
         res = supabase.table("stores").select("*").eq("bot_token", bot_token).execute()
@@ -472,7 +549,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             })
         return {"ok": True}
 
-    # Route request to Store Chat processor
     payload = {
         "chat_id": chat_id,
         "user_text": user_text,
@@ -502,6 +578,19 @@ async def store_chat_webhook(payload: dict):
     first_name = payload.get("first_name", "Customer")
     history_messages = payload.get("history_messages", [])
 
+    # Check Trial & Credits for Owner
+    if owner_telegram_id:
+        owner_id_int = int(owner_telegram_id)
+        get_or_create_user_subscription(owner_id_int)
+        if not verify_active_access(owner_id_int):
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": "⚠️ This store's AI receptionist trial has expired. Store owner needs to renew Pro access on the main bot."}
+                )
+            return {"ok": True}
+        deduct_credit(owner_id_int)
+
     theme_prompts = {
         "executive": (
             f"You are a luxury executive VIP concierge for {store_name}. "
@@ -527,9 +616,9 @@ async def store_chat_webhook(payload: dict):
         f"{selected_persona}\n\n"
         f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
         "STRICT GROUNDING RULES:\n"
-        "1. Answer strictly and accurately using the inventory and store details provided above.\n"
+        "1. Answer strictly using the inventory and contact details provided above.\n"
         "2. NEVER invent phone numbers, addresses, or unlisted prices.\n"
-        "3. If a customer asks about a product, check the inventory details above and give a precise answer regarding availability, pricing, and sizing."
+        "3. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified to complete the sale."
     )
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
@@ -562,7 +651,7 @@ async def store_chat_webhook(payload: dict):
             pass
 
     lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone"]
-    if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
+    if any(kw in user_text.lower() for kw in lead_keyword if kw in user_text.lower() for lead_keyword in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
         customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
         alert_msg = (
             f"🚨 *NEW HIGH-INTENT LEAD for {store_name}!*\n\n"
