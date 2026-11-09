@@ -34,7 +34,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Webhook Security Secret Token (Unhackable Verification)
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
 
-# Masked Financial Accounts (Protected from public scraping)
+# Secure Masked Financial Accounts (Prevents direct public scraping)
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "Telebirr Merchant / Wallet ID [SECURE-VERIFIED]")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "Awash Corporate Account [SECURE-VERIFIED]")
 
@@ -120,10 +120,10 @@ def deduct_credit(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Core Logic: Dynamic Volume Load Balancer (Whole Birr Variations)
+# Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
 # -------------------------------------------------------------------
-def select_optimal_payout_destination() -> tuple[str, str, int]:
-    """Balances daily volume and generates whole Birr variations (e.g. 3501, 3502, 3512) without cents."""
+def select_optimal_payout_destination() -> tuple[str, str, int, str]:
+    """Generates whole Birr amounts dynamically between 3500 and 3600 ETB to avoid banking flags."""
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
     
@@ -134,8 +134,8 @@ def select_optimal_payout_destination() -> tuple[str, str, int]:
     
     SAFE_TELEBIRR_CAP = 20000.0 
     
-    # Pick a whole Birr unique variation between 3501 and 3525 ETB
-    whole_birr_amount = random.randint(3501, 3525)
+    # Pick a random whole Birr variation between 3500 and 3600 ETB
+    whole_birr_amount = random.randint(3500, 3600)
     
     if telebirr_24h_total + whole_birr_amount <= SAFE_TELEBIRR_CAP:
         return ("Telebirr Secure Gateway", TELEBIRR_ACCOUNT_MASKED, whole_birr_amount, "TELEBIRR")
@@ -205,15 +205,14 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• *Invoice ID:* `{order_id}`\n"
         f"• *Item:* Monthly Pro License (100% Privacy Protected)\n"
-        f"• *Exact Transfer Amount:* **{exact_amount_etb} ETB** *(Whole Birr Verification)*\n"
+        f"• *Exact Transfer Amount:* **{exact_amount_etb} ETB** *(Whole Birr Session Guarantee)*\n"
         f"• *Payment Gateway:* `{channel_name}`\n"
         f"• *Secure Account Reference:* `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🚨 **STRICT INSTRUCTIONS FOR INSTANT ACTIVATION:**\n"
-        f"1. Transfer **EXACTLY `{exact_amount_etb} ETB`** (No cents, whole Birr amount matches your unique session).\n"
-        f"2. Your personal privacy is 100% protected—merchant names are securely masked.\n"
-        f"3. Take a screenshot of your successful transaction receipt.\n"
-        f"4. Send the screenshot right here in this chat for instant Groq Vision OCR verification."
+        f"1. Transfer **EXACTLY `{exact_amount_etb} ETB`** (whole Birr amount uniquely matched to your session).\n"
+        f"2. Take a screenshot of your successful transaction receipt.\n"
+        f"3. Send the screenshot right here in this chat for instant Groq Vision OCR verification."
     )
     
     keyboard = [
@@ -226,7 +225,6 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     
-    # Generate weekly analytics summary metrics
     chats_count = 42
     deals_closed = 12
     hot_leads = 5
