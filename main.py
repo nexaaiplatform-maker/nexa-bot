@@ -23,7 +23,7 @@ from supabase import create_client, Client
 app = FastAPI()
 
 # -------------------------------------------------------------------
-# Configuration & Environment Variables
+# Configuration & Environment Variables (Your Exact Ethiopian Accounts)
 # -------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
@@ -34,9 +34,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Webhook Security Secret Token
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
 
-# Remitly Links for Dynamic Routing (Telebirr & Awash Bank)
-REMITLY_TELEBIRR_LINK = os.getenv("REMITLY_TELEBIRR_LINK", "https://remit.ly/pay/dawitandargachewb5917")
-REMITLY_AWASH_LINK = os.getenv("REMITLY_AWASH_LINK", "https://remit.ly/pay/dawitandargachewb5917")
+# Exact Ethiopian Bank & Mobile Wallet Accounts Provided
+TELEBIRR_ACCOUNT_NUMBER = os.getenv("TELEBIRR_ACCOUNT_NUMBER", "0965205354")
+AWASH_ACCOUNT_NUMBER = os.getenv("AWASH_ACCOUNT_NUMBER", "013201740373300")
 
 # Initialize Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -57,7 +57,7 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Bot is live and awake"}
+    return {"status": "healthy", "service": "Nexa AI Ethiopia Bot is live and awake"}
 
 
 # -------------------------------------------------------------------
@@ -120,23 +120,24 @@ def deduct_credit(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Core Logic: Dynamic Volume Load Balancer (Telebirr vs. Awash)
+# Core Logic: Dynamic Volume Load Balancer (Telebirr vs. Awash ETB)
 # -------------------------------------------------------------------
-def select_optimal_payout_destination(payment_amount_etb: float = 6500.0) -> tuple[str, str]:
+def select_optimal_payout_destination(payment_amount_etb: float = 3500.0) -> tuple[str, str, str]:
+    """Balances daily volume between Telebirr and Awash Bank to stay safe under daily limits."""
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
     
     telebirr_24h_total = sum(
-        tx["amount_etb"] for tx in transaction_history 
-        if tx["destination"] == "TELEBIRR" and tx["timestamp"] > twenty_four_hours_ago
+        tx.get("amount_etb", 0) for tx in transaction_history 
+        if tx.get("destination") == "TELEBIRR" and tx.get("timestamp", now) > twenty_four_hours_ago
     )
     
     SAFE_TELEBIRR_CAP = 20000.0 
     
     if telebirr_24h_total + payment_amount_etb <= SAFE_TELEBIRR_CAP:
-        return ("Telebirr Mobile Wallet", REMITLY_TELEBIRR_LINK)
+        return ("Telebirr Mobile Wallet", TELEBIRR_ACCOUNT_NUMBER, "TELEBIRR")
     else:
-        return ("Awash Bank Savings Account", REMITLY_AWASH_LINK)
+        return ("Awash Bank Savings Account", AWASH_ACCOUNT_NUMBER, "AWASH")
 
 
 # -------------------------------------------------------------------
@@ -151,20 +152,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
-        status_text = "⭐ *Pro Member — Unlimited 24/7 Sales Machine Active*"
+        status_text = "⭐ *Pro Member — Unlimited 24/7 Ethiopian Sales Machine Active*"
     elif has_access:
         status_text = (
-            f"🔥 *Free Trial Active (Don't Miss Out!)*\n"
+            f"🔥 *Free Trial Active (ኢትዮጵያ)*\n"
             f"• *Expires:* `{expires_str}`\n"
             f"• *AI Credits Left:* `{sub_data['credits_remaining']}`\n"
-            f"⚡ *Tip:* Every unanswered customer message is a lost sale. Deploy your store now!"
+            f"⚡ *Tip:* Automate your Telegram channel sales in Birr 24/7!"
         )
     else:
-        status_text = "⚠️ *Trial Expired* — Upgrade to Pro immediately to prevent your store bot from pausing customer sales."
+        status_text = "⚠️ *Trial Expired* — Upgrade to Pro in ETB to keep your store bot running."
 
     welcome_text = (
-        f"🚀 *Welcome to Nexa AI Enterprise Platform, {user.first_name}!*\n\n"
-        f"You are 2 minutes away from deploying a tireless AI sales receptionist that closes deals, answers questions in any language, and texts you instant high-intent buyer leads 24/7.\n\n"
+        f"🇪🇹 *Welcome to Nexa AI Ethiopia Platform, {user.first_name}!*\n\n"
+        f"Deploy a tireless AI sales receptionist inside Telegram that closes deals in Amharic, English, or Afaan Oromo, answers product questions, and notifies you instantly when customers want to buy.\n\n"
         f"📊 *Your Account Status:*\n{status_text}\n\n"
         "🎯 **Quick Start Guide:**\n"
         "1️⃣ Type /register to launch your custom AI store bot.\n"
@@ -173,7 +174,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 Unlock Pro Status ($50.00)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🚀 Unlock Pro Status (3,500 ETB)", callback_data="buy_pro")],
         [InlineKeyboardButton("💎 Launch AI Store Now (/register)", callback_data="start_register")]
     ]
     await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -182,37 +183,37 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
+    # Generate unique cent variation for instant OCR receipt matching (e.g., 3500.45 ETB)
     cents_offset = random.randint(10, 99)
-    exact_amount = f"50.{cents_offset}"
-    order_id = f"NEXA-{random.randint(1000, 9999)}"
-    estimated_etb = float(exact_amount) * 130.0
+    exact_amount_etb = f"3500.{cents_offset}"
+    order_id = f"NEXA-ET-{random.randint(1000, 9999)}"
     
-    channel_name, remitly_url = select_optimal_payout_destination(estimated_etb)
+    channel_name, account_number, channel_code = select_optimal_payout_destination(float(exact_amount_etb))
     
     pending_orders[user_id] = {
         "order_id": order_id,
-        "amount": exact_amount,
+        "amount": exact_amount_etb,
         "channel": channel_name,
+        "destination_code": channel_code,
         "status": "pending_payment"
     }
     
     invoice_text = (
-        f"🧾 *NEXA AI SECURE PRO INVOICE*\n"
+        f"🇪🇹 *NEXA AI ETHIOPIA PRO INVOICE*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• *Invoice ID:* `{order_id}`\n"
-        f"• *Item:* Unlimited Pro License (Monthly)\n"
-        f"• *Exact Transfer Amount:* `${exact_amount} USD`\n"
-        f"• *Secure Payout Rail:* `{channel_name}`\n"
+        f"• *Item:* Monthly Pro License (Ethiopian Channels)\n"
+        f"• *Exact Transfer Amount:* `{exact_amount_etb} ETB`\n"
+        f"• *Payment Rail:* `{channel_name}`\n"
+        f"• *Account Number / Phone:* `{account_number}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🚨 **CRITICAL INSTRUCTIONS FOR INSTANT ACTIVATION:**\n"
-        f"1. Click the payment button below to open Remitly.\n"
-        f"2. Send **EXACTLY `${exact_amount}`** (the unique cents guarantee instant automated verification).\n"
-        f"3. Take a screenshot of your successful transfer receipt.\n"
-        f"4. Send the screenshot right here in this chat to activate instantly."
+        f"1. Transfer **EXACTLY `{exact_amount_etb} ETB`** to the account above via Telebirr or Awash Bank (the unique cents guarantee instant automated verification).\n"
+        f"2. Take a screenshot of your successful transfer receipt.\n"
+        f"3. Send the screenshot right here in this chat to activate instantly."
     )
     
     keyboard = [
-        [InlineKeyboardButton(f"💳 Pay ${exact_amount} via Remitly", url=remitly_url)],
         [InlineKeyboardButton("✅ I Have Paid — Upload Receipt", callback_data="upload_receipt")]
     ]
     
@@ -226,9 +227,9 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not new_inventory:
         await update.message.reply_text(
             "⚠️ *How to update your inventory live:*\n\n"
-            "Type `/update` followed by your items, prices, and stock.\n\n"
+            "Type `/update` followed by your items, prices in ETB, and stock.\n\n"
             "*Example:* \n"
-            "`/update Item 1: Nike Air Max - $110 (8 left)\nItem 2: Jordan 4 - $160 (3 left)`",
+            "`/update Item 1: Kemis - 2,500 ETB (5 left)\nItem 2: Habesha Shoes - 3,200 ETB (2 left)`",
             parse_mode="Markdown"
         )
         return
@@ -253,9 +254,9 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💎 *NEXA AI STORE BUILDER WIZARD*\n\n"
-        "Let's create your automated sales bot in 3 simple steps.\n\n"
-        "**Step 1 of 3:** What is the official name of your business, boutique, or store? (e.g. *Abebe Shoes*)"
+        "🇪🇹 *NEXA AI ETHIOPIA STORE BUILDER WIZARD*\n\n"
+        "Let's create your automated Telegram sales bot in 3 simple steps.\n\n"
+        "**Step 1 of 3:** What is the official name of your business or Telegram channel? (e.g. *Habesha Fashion*)"
     )
     return STORE_NAME
 
@@ -311,7 +312,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await target_message(
         f"Selected Persona: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
-        "**Step 3 of 3:** Paste your complete inventory list, prices, sizes, stock count, and location details below so the AI knows what to sell:",
+        "**Step 3 of 3:** Paste your complete inventory list, prices in ETB, sizes, stock count, and location details below so the AI knows what to sell:",
         parse_mode="Markdown"
     )
     return INVENTORY
@@ -355,11 +356,11 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ Warning saving store to database: {str(e)}")
 
     success_msg = (
-        f"🎉 *CONGRATULATIONS! YOUR AI STORE IS LIVE!* 🚀\n\n"
+        f"🎉 *CONGRATULATIONS! YOUR ETHIOPIAN AI STORE IS LIVE!* 🇪🇹🚀\n\n"
         f"• *Store Name:* {store_name}\n"
         f"• *Sales Persona:* {ui_theme.capitalize()}\n"
         f"• *Webhook Status:* Connected & Active ✅\n\n"
-        "Your bot is now ready to receive customers, answer questions in any language, and notify you instantly whenever someone wants to buy!"
+        "Your bot is now ready to receive Ethiopian customers, answer inquiries in Amharic/English/Oromo, and notify you instantly when someone wants to buy!"
     )
     await update.message.reply_text(success_msg, parse_mode="Markdown")
     return ConversationHandler.END
@@ -380,7 +381,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "start_register":
         await query.message.reply_text("Please use the /register command to begin onboarding your store.")
     elif query.data == "upload_receipt":
-        await query.message.reply_text("📸 Please upload your payment screenshot now. Our Vision OCR will verify it in seconds!")
+        await query.message.reply_text("📸 Please upload your Telebirr or Awash Bank payment screenshot now. Our Vision OCR will verify it in seconds!")
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -388,7 +389,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     order = pending_orders.get(user_id)
     
     if not order:
-        await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure invoice first.")
+        await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure ETB invoice first.")
         return
 
     photo_file = await update.message.photo[-1].get_file()
@@ -403,9 +404,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if groq_client:
         try:
             prompt = (
-                f"Analyze this payment receipt image. Extract:\n"
+                f"Analyze this Ethiopian bank or Telebirr payment receipt image. Extract:\n"
                 f"1. Transaction Reference ID or Confirmation Code\n"
-                f"2. Total Amount transferred\n"
+                f"2. Total Amount in ETB transferred\n"
                 f"Return strictly JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
@@ -462,19 +463,26 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 pass
 
+        # Record successful transaction for volume load balancing
+        transaction_history.append({
+            "amount_etb": float(expected_amount),
+            "destination": order.get("destination_code", "TELEBIRR"),
+            "timestamp": datetime.now()
+        })
+
         await update.message.reply_text(
-            f"✅ *PAYMENT VERIFIED & PRO UNLOCKED!* ⭐\n\n"
+            f"✅ *PAYMENT VERIFIED & PRO UNLOCKED!* ⭐🇪🇹\n\n"
             f"• *Invoice ID:* `{order['order_id']}`\n"
             f"• *Ref ID:* `{ref_id}`\n"
             f"• *Status:* Unlimited Pro Access Active\n\n"
-            f"Your store is fully upgraded!",
+            f"Your Ethiopian store is fully upgraded!",
             parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
             f"📥 *Receipt Logged for Manual Admin Review*\n\n"
             f"• *Invoice ID:* `{order['order_id']}`\n"
-            f"• *Expected Amount:* `${expected_amount}`\n"
+            f"• *Expected Amount:* `{expected_amount} ETB`\n"
             f"• *Detected Ref ID:* `{ref_id or 'Pending...'}`\n\n"
             f"Vision OCR could not auto-verify this screenshot. An admin has been alerted to manually check your bank deposit.",
             parse_mode="Markdown"
@@ -640,7 +648,7 @@ async def store_chat_webhook(payload: dict):
         ),
         "minimalist": (
             f"You are a direct and concise assistant for {store_name}. "
-            "Give brief, clear, to-the-point answers without fluff. State stock numbers, prices, and contact steps immediately."
+            "Give brief, clear, to-the-point answers without fluff. State stock numbers, prices in ETB, and contact steps immediately."
         )
     }
 
@@ -649,9 +657,9 @@ async def store_chat_webhook(payload: dict):
     system_prompt = (
         f"{selected_persona}\n\n"
         f"STORE INVENTORY & DETAILS:\n{inventory_data}\n\n"
-        "STRICT GROUNDING & MULTI-LANGUAGE RULES:\n"
-        "1. Automatically detect the language of the customer's message (e.g., English, Amharic, Afaan Oromo, etc.) and respond fluently in that exact same language.\n"
-        "2. Answer strictly using the inventory and contact details provided above.\n"
+        f"STRICT GROUNDING & ETHIOPIAN MULTI-LANGUAGE RULES:\n"
+        "1. Automatically detect the language of the customer's message (Amharic, Afaan Oromo, English, Tigrinya, etc.) and respond fluently in that exact same language.\n"
+        "2. Answer strictly using the inventory and pricing in ETB provided above.\n"
         "3. NEVER invent phone numbers, addresses, or unlisted prices.\n"
         "4. If a customer wants to place an order or buy, confirm what they want and reassure them that the store owner has been notified immediately to complete the sale."
     )
