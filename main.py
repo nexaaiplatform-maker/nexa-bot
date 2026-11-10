@@ -60,7 +60,7 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Amharic Default is live"}
+    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Pure Amharic Default is live"}
 
 
 # -------------------------------------------------------------------
@@ -725,17 +725,17 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         ]
         reply_markup = {"inline_keyboard": keyboard}
         async with httpx.AsyncClient() as client:
-            # Welcome message with language selector
+            # Welcome message with language selector (Pure Amharic default - zero English)
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ / Please select your language:",
+                "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
                 "reply_markup": reply_markup,
                 "parse_mode": "Markdown"
             })
-            # Security & Customer Notification Notice
+            # Security & Customer Notification Notice (Pure Amharic local text)
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": "🛡️ *Security & Privacy Notice*: Your session is encrypted and secure with Nexa AI commerce protection.",
+                "text": "🛡️ *የደህንነት ማስታወሻ*: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።",
                 "parse_mode": "Markdown"
             })
         return {"ok": True}
