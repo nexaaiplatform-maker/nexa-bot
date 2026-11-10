@@ -153,33 +153,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
-        status_text = "⭐ *Pro Member — Unlimited 24/7 Multi-Bot Sales Machine Active*"
+        status_text = "⭐ *ፕሮ አባል — 24/7 ያልተገደበ ባለብዙ-ቦት የሽያጭ ስርዓት ንቁ ነው*"
     elif has_access:
         status_text = (
-            f"🔥 *Free Trial Active (3 Days)*\n"
-            f"• *Expires:* `{expires_str}`\n"
-            f"• *AI Credits Left:* `{sub_data['credits_remaining']}`\n"
-            f"⚡ *Security Reminder:* Never share your Bot Token or credentials!"
+            f"🔥 *የነጻ የሙከራ ጊዜ ንቁ ነው (3 ቀናት)*\n"
+            f"• * የሚያበቃበት:* `{expires_str}`\n"
+            f"• * የቀሩ የAI ዕርዳታዎች:* `{sub_data['credits_remaining']}`"
         )
     else:
-        status_text = "⚠️ *Trial Expired* — Upgrade to Pro in Birr to keep your bots running."
+        status_text = "⚠️ *የሙከራ ጊዜዎ አልቋል* — ቦቶችዎ እንዳይቆሙ በብር ክፍያ ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 *Welcome to Nexa AI Multi-Bot Platform, {user.first_name}!*\n\n"
-        f"Deploy and manage multiple industry-specialized AI bots (Gyms, Clinics, Real Estate, Stores) instantly with real-time synchronization.\n\n"
-        f"📊 *Your Account Status:*\n{status_text}\n\n"
-        "🎯 **Quick Start Guide:**\n"
-        "1️⃣ Type /register to launch or update an industry-tailored AI bot.\n"
-        "2️⃣ Type /mybots to view and manage all your deployed bots securely.\n"
-        "3️⃣ Type `/update <inventory or service details>` to update live instantly.\n"
-        "4️⃣ Type /summary to view real verified subscriber payments & hot leads."
+        f"🇪🇹 *እንኳን ወደ 넥ሳ AI (Nexa AI) የንግድ ማዕከል በደህና መጡ፣ {user.first_name}!*\n\n"
+        f"ለማንኛውም የንግድ ዘርፍ የሚሆን አውቶማቲክ የቴሌግራም AI ረዳት ቦት በቀላሉ ያዋቅሩ።\n\n"
+        f"📊 *የመለያዎ ሁኔታ:*\n{status_text}\n\n"
+        "🎯 *ፈጣን መመሪያ:*\n"
+        "1️⃣ /register - አዲስ AI ቦት ለማስጀመር\n"
+        "2️⃣ /mybots - ያስጀመሯቸውን ቦቶች ለመቆጣጠር\n"
+        "3️⃣ /update - ምርቶችዎን ወይም አገልግሎቶችዎን ለማዘመን\n"
+        "4️⃣ /summary - የገቢ እና የደንበኞችዎን መረጃ ለማየት"
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 Unlock Pro Status (Secure Birr)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🤖 Manage My Bots (/mybots)", callback_data="view_my_bots")],
-        [InlineKeyboardButton("📊 Live Revenue & Summary (/summary)", callback_data="view_summary")],
-        [InlineKeyboardButton("💎 Launch Industry AI Bot (/register)", callback_data="start_register")]
+        [InlineKeyboardButton("🚀 ፕሮ ማስተካከያ (በደህንነቱ የተጠበቀ ብር)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
+        [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
+        [InlineKeyboardButton("💎 አዲስ AI ቦት አስጀምር (/register)", callback_data="start_register")]
     ]
     await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -187,29 +186,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
     if not supabase:
-        await update.message.reply_text("Database connection inactive.")
+        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
         res = supabase.table("stores").select("store_name", "industry", "ui_theme", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
         if not res.data:
-            await update.message.reply_text("⚠️ You have no active bots deployed yet. Use /register to launch your first AI bot!")
+            await update.message.reply_text("⚠️ እስካሁን ያስጀመሩት ቦት የለም። /register በመጠቀም የመጀመሪያዎን ቦት ይፍጠሩ!")
             return
 
-        bots_list_text = "🤖 *YOUR DEPLOYED AI BOTS MANAGEMENT DASHBOARD*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        bots_list_text = "🤖 *የእርስዎ ንቁ የAI ቦቶች ዝርዝር*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
             masked_token = store["bot_token"][:8] + "..." + store["bot_token"][-4:] if len(store["bot_token"]) > 12 else "***"
             bots_list_text += (
                 f"*{idx}. {store['store_name']}*\n"
-                f"• *Industry Niche:* `{store.get('industry', 'General E-Commerce').capitalize()}`\n"
-                f"• *Persona:* `{store['ui_theme'].capitalize()}`\n"
-                f"• *Token Key:* `{masked_token}`\n"
-                f"• *Status:* Live & Synchronized ✅\n\n"
+                f"• *የንግድ ዘርፍ:* `{store.get('industry', 'አጠቃላይ').capitalize()}`\n"
+                f"• *የንግግር ዘይቤ:* `{store['ui_theme'].capitalize()}`\n"
+                f"• *የቶከን ቁጥር:* `{masked_token}`\n"
+                f"• *ሁኔታ:* በመስመር ላይ እና በስራ ላይ ✅\n\n"
             )
-        bots_list_text += "🔒 *Security Note:* All bot tokens are securely isolated and updated in real-time."
+        bots_list_text += "🔒 *ማስታወሻ:* የቦት ቶከኖችዎ ሙሉ በሙሉ የተጠበቁ ናቸው።"
         await update.message.reply_text(bots_list_text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error fetching your bots: {str(e)}")
+        await update.message.reply_text(f"ቦቶቹን ማምጣት አልተቻለም: {str(e)}")
 
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,29 +226,28 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     invoice_text = (
-        f"🔒 *NEXA AI SECURE ENCRYPTED INVOICE*\n"
+        f"🔒 *የክፍያ መጠየቂያ (INVOICE)*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *Invoice ID:* `{order_id}`\n"
-        f"• *Item:* Monthly Pro License (Multi-Bot Access)\n"
-        f"• *Exact Transfer Amount:* **{exact_amount_etb} ETB** *(Whole Birr Session Guarantee)*\n"
-        f"• *Payment Gateway:* `{channel_name}`\n"
-        f"• *Secure Account Reference:* `{masked_account}`\n"
+        f"• *የግብይት ቁጥር:* `{order_id}`\n"
+        f"• *አገልግሎት:* ወርሃዊ ፕሮ ፈቃድ (ያልተገደበ ቦቶች)\n"
+        f"• *ማስተላለፍ ያለብዎት ትክክለኛ መጠን:* **{exact_amount_etb} ብር**\n"
+        f"• *የክፍያ ማስተላለፊያ:* `{channel_name}`\n"
+        f"• *የሂሳብ ቁጥር/መለያ:* `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🚨 *INSTRUCTIONS FOR INSTANT ACTIVATION:*\n"
-        f"1. Transfer **EXACTLY `{exact_amount_etb} ETB`** (whole Birr amount uniquely matched to your session).\n"
-        f"2. Take a screenshot of your successful transaction receipt.\n"
-        f"3. Send the screenshot right here in this chat for instant Groq Vision OCR verification."
+        f"🚨 *ትኩረት የሚሹ መመሪያዎች:*\n"
+        f"1. በትክክል **`{exact_amount_etb} ብር`** ያስተላልፉ።\n"
+        f"2. የተሳካውን የክፍያ ደረሰኝ (ስክሪንሾት) ፎቶ ያንሱ።\n"
+        f"3. ማረጋገጫ ለማግኘት እዚህ ቻት ላይ የደረሰኙን ፎቶ ይላኩ።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("✅ I Have Paid — Upload Receipt", callback_data="upload_receipt")]
+        [InlineKeyboardButton("✅ ክፍያ ፈጽሜአለሁ — ፎቶ ላክ", callback_data="upload_receipt")]
     ]
     
     await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Fetch real verified payments and subscribers from Supabase
     total_revenue = 0
     total_subscribers = 0
     if supabase:
@@ -262,13 +260,13 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     summary_text = (
-        f"📊 *NEXA AI REAL-TIME FINANCIAL & BUSINESS SUMMARY*\n"
+        f"📊 *የገቢ እና አጠቃላይ የንግድ ማጠቃለያ*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *Total Verified Subscriptions Paid:* `{total_subscribers}` users\n"
-        f"• *Total Verified Revenue:* `{total_revenue:,.2f} ETB`\n"
-        f"• *Active AI Receptionists:* Deployed & Synchronized 24/7 ✅\n"
+        f"• *አጠቃላይ የተረጋገጡ ተመዝጋቢዎች:* `{total_subscribers}` ሰዎች\n"
+        f"• *አጠቃላይ የተረጋገጠ ገቢ:* `{total_revenue:,.2f} ብር`\n"
+        f"• *ንቁ የAI ረዳቶች:* 24/7 እየሰሩ ናቸው ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎯 *Analytics Insight:* Your AI agents are actively handling customer inquiries, bookings, and memberships in real time!"
+        f"🎯 AI ቦቶችዎ ደንበኞችን ያለማቋረጥ እያስተናገዱ ይገኛሉ!"
     )
     await update.message.reply_text(summary_text, parse_mode="Markdown")
 
@@ -279,37 +277,37 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.message.reply_text(
-            "⚠️ *How to update your inventory, service packages, or memberships live:*\n\n"
-            "Type `/update` followed by your details.\n\n"
-            "*Example for Gym/Service:* \n"
-            "`/update Package 1: Monthly Gym Membership - 1,500 ETB\nPackage 2: VIP Personal Training - 3,500 ETB`",
+            "⚠️ *መረጃዎን ለማዘመን የሚከተለውን ይጠቀሙ:*\n\n"
+            "`/update` ብለው አዳዲስ መረጃዎችን፣ ዋጋዎችን ወይም አገልግሎቶችን ይጻፉ።\n\n"
+            "*ምሳሌ:*\n"
+            "`/update እቃ 1: ሻንጣ - 2,500 ብር\nእቃ 2: ጫማ - 3,200 ብር`",
             parse_mode="Markdown"
         )
         return
 
     if not supabase:
-        await update.message.reply_text("Database connection inactive.")
+        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
         res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
         if res.data:
             await update.message.reply_text(
-                "✅ *Details Updated Live Across All Your Bots Instantly!*\n\nYour AI receptionists are now responding with your updated pricing, schedules, and membership packages immediately without resetting chats.",
+                "✅ *መረጃዎ በሁሉም ቦቶችዎ ላይ ወዲያውኑ ዘምኗል!*\n\nየእርስዎ AI ረዳቶች አዲሱን ዋጋ እና መረጃ በመጠቀም ደንበኞችን ማስተናገድ ጀምረዋል።",
                 parse_mode="Markdown"
             )
         else:
-            await update.message.reply_text("⚠️ No active store found for your account. Please use /register first.")
+            await update.message.reply_text("⚠️ ንቁ መደብር አልተገኘም። እባክዎ መጀመሪያ /register ይጠቀሙ።")
     except Exception as e:
-        await update.message.reply_text(f"Failed to update data: {str(e)}")
+        await update.message.reply_text(f" ማዘመን አልተቻለም: {str(e)}")
 
 
-# --- Onboarding Conversation Handlers with Industry Field Selection ---
+# --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🇪🇹 *NEXA AI INDUSTRY BOT BUILDER WIZARD*\n\n"
-        "Let's deploy or reconnect your automated Telegram AI bot in a few simple steps.\n\n"
-        "**Step 1 of 4:** What is the official name of your business, gym, clinic, or service? (e.g. *Admas Fitness & Gym*)"
+        "🇪🇹 *የAI ቦት ማዋቀሪያ ረዳት*\n\n"
+        "የቴሌግራም AI ረዳትዎን በጥቂት ቀላል እርምጃዎች እናዋቅረው።\n\n"
+        "እርምጃ 1 ከ 4: የንግድዎ፣ የድርጅትዎ ወይም የሰርጥዎ ሙሉ ስም ማን ይባላል? (ለምሳሌ፦ *አድማስ የንግድ ማዕከል*)"
     )
     return STORE_NAME
 
@@ -318,18 +316,18 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["store_name"] = update.message.text
     
     keyboard = [
-        [InlineKeyboardButton("🏋️ Gym, Fitness & Wellness", callback_data="ind_gym")],
-        [InlineKeyboardButton("🏠 Real Estate & Property", callback_data="ind_realestate")],
-        [InlineKeyboardButton("🩺 Clinic & Healthcare", callback_data="ind_clinic")],
-        [InlineKeyboardButton("🤝 Brokerage & Agency", callback_data="ind_broker")],
-        [InlineKeyboardButton("🛍️ Boutique & Retail Store", callback_data="ind_boutique")],
-        [InlineKeyboardButton("⚙️ General Services & Tech", callback_data="ind_general")]
+        [InlineKeyboardButton("🏬 የችርቻሮ እና የንግድ ዕቃዎች", callback_data="ind_retail")],
+        [InlineKeyboardButton("🏋️ የስፖርት እና የጤና ማዕከል", callback_data="ind_fitness")],
+        [InlineKeyboardButton("🏠 የቤት እና የቦታ ኪራይ/ሽያጭ", callback_data="ind_realestate")],
+        [InlineKeyboardButton("🩺 የጤና ክሊኒክ እና ፋርማሲ", callback_data="ind_clinic")],
+        [InlineKeyboardButton("🤝 የንግድ ኤጀንሲ እናደልላ", callback_data="ind_broker")],
+        [InlineKeyboardButton("⚙️ ሌሎች አገልግሎቶች", callback_data="ind_general")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"Business Name Recorded: *{update.message.text}*.\n\n"
-        "**Step 2 of 4:** Select your primary **Industry Niche** so the AI tailors its sales and booking expertise:",
+        f"የድርጅቱ ስም ተመዝግቧል: *{update.message.text}*።\n\n"
+        "እርምጃ 2 ከ 4: የንግድ ዘርፍዎን ይምረጡ፦",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -337,7 +335,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chosen_industry = "general commerce"
+    chosen_industry = "general"
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -350,16 +348,16 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["industry"] = chosen_industry
 
     keyboard = [
-        [InlineKeyboardButton("💎 Luxury Executive (Elite & Refined)", callback_data="theme_executive")],
-        [InlineKeyboardButton("⚡ High-Energy Sales (Aggressive Closer)", callback_data="theme_sales")],
-        [InlineKeyboardButton("🌿 Friendly Advisor (Warm & Helpful)", callback_data="theme_friendly")],
-        [InlineKeyboardButton("🎯 Direct Minimalist (Short & Precise)", callback_data="theme_minimalist")]
+        [InlineKeyboardButton("💎 ከፍተኛ ባለሙያ (Executive)", callback_data="theme_executive")],
+        [InlineKeyboardButton("⚡ ኃይለኛ ሻጭ (Sales Closer)", callback_data="theme_sales")],
+        [InlineKeyboardButton("🌿 ወዳጃዊ እና አስተማሪ (Friendly)", callback_data="theme_friendly")],
+        [InlineKeyboardButton("🎯 ቀጥተኛ እና አጭር (Minimalist)", callback_data="theme_minimalist")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"Industry Selected: *{chosen_industry.capitalize()}*.\n\n"
-        "**Step 3 of 4:** Choose how your AI assistant should talk to customers:",
+        f"የተመረጠው ዘርፍ: *{chosen_industry.capitalize()}*።\n\n"
+        "እርምጃ 3 ከ 4: የAI ረዳትዎ ከደንበኞች ጋር እንዴት እንዲነጋገር ይፈልጋሉ?",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -378,7 +376,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text.lower()
         if "sales" in text:
             chosen_theme = "sales"
-        elif "friendly" in text or "advisor" in text:
+        elif "friendly" in text:
             chosen_theme = "friendly"
         elif "minimalist" in text:
             chosen_theme = "minimalist"
@@ -388,16 +386,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["ui_theme"] = chosen_theme
     
-    theme_labels = {
-        "executive": "💎 Luxury Executive",
-        "sales": "⚡ High-Energy Sales",
-        "friendly": "🌿 Friendly Advisor",
-        "minimalist": "🎯 Direct Minimalist"
-    }
-    
     await target_message(
-        f"Selected Persona: *{theme_labels.get(chosen_theme, 'Custom')}*.\n\n"
-        "**Step 4 of 4:** Paste your complete inventory, membership packages, service list, or pricing in ETB below (e.g., Gym monthly fee, personal training, schedules):",
+        "እርምጃ 4 ከ 4: የሚሸጡዋቸውን እቃዎች፣ አገልግሎቶች ወይም የዋጋ ዝርዝር በብር (ETB) ከነ መግለጫቸው ከታች ይጻፉልን:",
         parse_mode="Markdown"
     )
     return INVENTORY
@@ -406,9 +396,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.message.text
     await update.message.reply_text(
-        "Almost done! \n\n"
-        "Go to Telegram's official **@BotFather**, create a bot (`/newbot`), copy your unique **Bot Token**, and paste it right here:\n\n"
-        "*(Note: Re-entering an existing token securely reconnects and updates your bot instantly without losing data!)*",
+        "ሊጠናቀቅ ነው።\n\n"
+        "እባክዎ ወደ ቴሌግራም **@BotFather** በመሄድ አዲስ ቦት ይፍጠሩ (`/newbot`)፣ የሰጡዎትን የ **Bot Token** እዚህ ይለጥፉ (Paste ያድርጉ):",
         parse_mode="Markdown"
     )
     return BOT_TOKEN
@@ -418,10 +407,10 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_token = update.message.text.strip()
     owner_telegram_id = str(update.message.from_user.id)
     
-    store_name = context.user_data.get("store_name", "My Store")
+    store_name = context.user_data.get("store_name", "የእኔ ንግድ")
     industry = context.user_data.get("industry", "general")
     ui_theme = context.user_data.get("ui_theme", "executive")
-    inventory_data = context.user_data.get("inventory_data", "No inventory specified.")
+    inventory_data = context.user_data.get("inventory_data", "ዝርዝር መረጃ አልተሰጠም")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     async with httpx.AsyncClient() as client:
@@ -430,7 +419,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             json={"url": tenant_webhook_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
         )
 
-    # Intelligent Upsert for Re-entered Tokens
     if supabase:
         try:
             supabase.table("stores").upsert({
@@ -442,26 +430,25 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "inventory_data": inventory_data
             }, on_conflict="bot_token").execute()
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Warning saving store to database: {str(e)}")
+            await update.message.reply_text(f"⚠️ ማስቀመጥ ላይ ችግር ተፈጥሯል: {str(e)}")
 
     success_msg = (
-        f"🎉 *CONGRATULATIONS! YOUR INDUSTRY AI BOT IS LIVE!* 🇪🇹🚀\n\n"
-        f"• *Business Name:* {store_name}\n"
-        f"• *Industry:* {industry.capitalize()}\n"
-        f"• *Persona:* {ui_theme.capitalize()}\n"
-        f"• *Webhook Status:* Synchronized & Active ✅\n\n"
-        "Your bot is now fully operational with specialized industry AI intelligence!"
+        f"🎉 *እንኳን ደስ አለዎት! የንግድ ቦትዎ በመስመር ላይ ውሏል!* 🇪🇹🚀\n\n"
+        f"• *የድርጅቱ ስም:* {store_name}\n"
+        f"• *ዘርፍ:* {industry.capitalize()}\n"
+        f"• *ሁኔታ:* ንቁ እና የተገናኘ ✅\n\n"
+        "ቦትዎ አሁን ከደንበኞች ጋር ለመነጋገር ዝግጁ ነው።"
     )
     await update.message.reply_text(success_msg, parse_mode="Markdown")
     return ConversationHandler.END
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Registration cancelled. Type /register whenever you are ready.")
+    await update.message.reply_text("❌ ምዝገባው ተሰርዟል። እንደገና ለመጀመር /register ይጠቀሙ።")
     return ConversationHandler.END
 
 
-# --- Payment Button & 100% Accurate Groq Vision OCR Verification ---
+# --- Payment & OCR Handlers ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -473,9 +460,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "view_my_bots":
         await my_bots_command(update, context)
     elif query.data == "start_register":
-        await query.message.reply_text("Please use the /register command to deploy or update your bot.")
+        await query.message.reply_text("ቦትዎን ለማስጀመር /register የሚለውን ትእዛዝ ይጠቀሙ።")
     elif query.data == "upload_receipt":
-        await query.message.reply_text("📸 Please upload your payment screenshot now. Our 100% accurate Vision OCR will verify your whole-Birr transfer in seconds!")
+        await query.message.reply_text("📸 እባክዎ የክፍያ ደረሰኝ ፎቶዎን አሁን ይላኩ።")
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -483,7 +470,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     order = pending_orders.get(user_id)
     
     if not order:
-        await update.message.reply_text("❌ No active pending order found. Type /upgrade to generate a secure invoice first.")
+        await update.message.reply_text("❌ ንቁ የክፍያ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade በመጠቀም ይሞክሩ።")
         return
 
     photo_file = await update.message.photo[-1].get_file()
@@ -527,8 +514,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
             if existing_tx.data:
                 await update.message.reply_text(
-                    f"🚫 *SECURITY ALERT: RECEIPT REUSE DETECTED!*\n\n"
-                    f"Transaction ID `{ref_id}` has already been redeemed previously. Duplicate receipts are blocked.",
+                    f"🚫 *ማስጠንቀቂያ: ይህ ደረሰኝ ቀደም ሲል ጥቅም ላይ ውሏል!*\n\nድጋሚ መጠቀም የተከለከለ ነው።",
                     parse_mode="Markdown"
                 )
                 return
@@ -540,7 +526,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if parsed_result.get("valid") and amount_matches and ref_id:
         if supabase:
             try:
-                # Log receipt to prevent reuse
                 supabase.table("processed_receipts").insert({
                     "user_id": str(user_id),
                     "order_id": order["order_id"],
@@ -550,7 +535,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     "created_at": datetime.now().isoformat()
                 }).execute()
 
-                # Log verified payment for live revenue tracking
                 supabase.table("paid_subscriptions").insert({
                     "user_id": str(user_id),
                     "order_id": order["order_id"],
@@ -558,14 +542,13 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     "reference_id": ref_id
                 }).execute()
 
-                # Unlock Pro
                 supabase.table("subscriptions").upsert({
                     "user_id": str(user_id),
                     "is_pro": True,
                     "credits_remaining": 999999
                 }).execute()
             except Exception as e:
-                print(f"DB Error on payment log: {e}")
+                print(f"DB Error: {e}")
 
         transaction_history.append({
             "amount_etb": float(expected_amount),
@@ -574,27 +557,20 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         })
 
         await update.message.reply_text(
-            f"✅ *PAYMENT VERIFIED & PRO UNLOCKED!* ⭐🇪🇹\n\n"
-            f"• *Invoice ID:* `{order['order_id']}`\n"
-            f"• *Ref ID:* `{ref_id}`\n"
-            f"• *Status:* Unlimited Pro Access Active across all your bots!\n\n"
-            f"Your account is fully upgraded!",
+            f"✅ *ክፍያው ተረጋግጧል! ፕሮ አካውንትዎ ገብቷል!* ⭐🇪🇹\n\n"
+            f"• *የግብይት መለያ:* `{ref_id}`\n"
+            f"• *ሁኔታ:* ያልተገደበ አገልግሎት ንቁ ሆኗል!",
             parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
-            f"📥 *Receipt Logged for Secure Review*\n\n"
-            f"• *Invoice ID:* `{order['order_id']}`\n"
-            f"• *Expected Amount:* `{expected_amount} ETB`\n"
-            f"• *Detected Ref ID:* `{ref_id or 'Pending...'}`\n\n"
-            f"Vision OCR could not auto-verify this screenshot. An admin has been alerted to check your transaction securely.",
+            f"📥 *ደረሰኙ ለግምገማ ተመዝግቧል*\n\n"
+            f"በራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው አረጋግጦ ይመልስልዎታል።",
             parse_mode="Markdown"
         )
 
 
-# -------------------------------------------------------------------
-# Register Telegram Handlers & Conversation Handler
-# -------------------------------------------------------------------
+# --- Handlers Registration ---
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
     states={
@@ -623,9 +599,7 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
-# -------------------------------------------------------------------
-# FastAPI Webhook Lifecycle & Tenant Webhook Routing
-# -------------------------------------------------------------------
+# --- FastAPI Webhook Lifecycle & Tenant Routing ---
 @app.on_event("startup")
 async def startup_event():
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
@@ -681,8 +655,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
     from_user = message.get("from", {})
-    username = from_user.get("username", "Unknown User")
-    first_name = from_user.get("first_name", "Customer")
+    username = from_user.get("username", "አልታወቀም")
+    first_name = from_user.get("first_name", "ደንበኛ")
     
     if not chat_id or not user_text:
         return {"ok": True}
@@ -697,7 +671,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id, 
-                "text": "Store configuration not found or inactive."
+                "text": "የንግድ መደብር ማስተካከያ አልተገኘም።"
             })
         return {"ok": True}
 
@@ -705,7 +679,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "chat_id": chat_id,
         "user_text": user_text,
         "bot_token": bot_token,
-        "store_name": store.get("store_name", "Our Store"),
+        "store_name": store.get("store_name", "ድርጅታችን"),
         "industry": store.get("industry", "general"),
         "ui_theme": store.get("ui_theme", "executive"),
         "inventory_data": store.get("inventory_data", ""),
@@ -723,13 +697,13 @@ async def store_chat_webhook(payload: dict):
     chat_id = payload.get("chat_id")
     user_text = payload.get("user_text", "")
     bot_token = payload.get("bot_token")
-    store_name = payload.get("store_name", "Our Store")
+    store_name = payload.get("store_name", "ድርጅታችን")
     industry = payload.get("industry", "general")
     ui_theme = payload.get("ui_theme", "executive")
     inventory_data = payload.get("inventory_data", "")
     owner_telegram_id = payload.get("owner_telegram_id")
-    username = payload.get("username", "Unknown User")
-    first_name = payload.get("first_name", "Customer")
+    username = payload.get("username", "አልታወቀም")
+    first_name = payload.get("first_name", "ደንበኛ")
     history_messages = payload.get("history_messages", [])
 
     if owner_telegram_id:
@@ -739,27 +713,27 @@ async def store_chat_webhook(payload: dict):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={"chat_id": chat_id, "text": "⚠️ This bot's AI receptionist trial has expired. Owner needs to renew Pro access on the main bot."}
+                    json={"chat_id": chat_id, "text": "⚠️ የዚህ ቦት የሙከራ ጊዜ አልቋል። ባለቤቱ ማደስ ይጠበቅበታል።"}
                 )
             return {"ok": True}
         deduct_credit(owner_id_int)
 
     theme_prompts = {
         "executive": (
-            f"You are a luxury executive VIP concierge for {store_name} operating in the {industry} sector. "
-            "Maintain an elite, highly professional, refined, and prestigious tone."
+            f"You are a professional executive VIP concierge for {store_name} in the {industry} sector. "
+            "Maintain a polite, elite, and prestigious tone."
         ),
         "sales": (
-            f"You are the top sales representative for {store_name} operating in the {industry} sector. "
-            "Maintain an enthusiastic, high-energy tone that creates excitement around memberships/services and closes deals quickly."
+            f"You are a top sales representative for {store_name} in the {industry} sector. "
+            "Be enthusiastic, helpful, and close sales quickly."
         ),
         "friendly": (
-            f"You are a friendly, warm, and welcoming local assistant for {store_name} in the {industry} sector. "
-            "Speak naturally, be deeply helpful, and make clients feel right at home."
+            f"You are a warm, welcoming local assistant for {store_name} ({industry}). "
+            "Speak naturally and make clients feel completely at home."
         ),
         "minimalist": (
-            f"You are a direct and concise assistant for {store_name} ({industry}). "
-            "Give brief, clear, to-the-point answers without fluff. State schedules, prices in ETB, and contact steps immediately."
+            f"You are a concise assistant for {store_name} ({industry}). "
+            "Give brief, clear, direct answers with prices in ETB."
         )
     }
 
@@ -767,18 +741,18 @@ async def store_chat_webhook(payload: dict):
 
     system_prompt = (
         f"{selected_persona}\n\n"
-        f"INDUSTRY FOCUS: {industry.capitalize()}\n"
-        f"SERVICES / MEMBERSHIPS / INVENTORY DATA:\n{inventory_data}\n\n"
-        f"STRICT GROUNDING & ETHIOPIAN MULTI-LANGUAGE RULES:\n"
-        "1. Automatically detect the language of the customer's message (Amharic, Afaan Oromo, English, Tigrinya, etc.) and respond fluently in that exact same language.\n"
-        "2. Answer strictly using the services, memberships, or pricing in ETB provided above.\n"
-        "3. NEVER invent phone numbers, addresses, or unlisted prices.\n"
-        "4. If a customer wants to sign up, book a session, or join, confirm what they want and reassure them that management has been notified immediately."
+        f"BUSINESS INDUSTRY: {industry.capitalize()}\n"
+        f"PRODUCTS / SERVICES / PRICING DATA:\n{inventory_data}\n\n"
+        f"RULES:\n"
+        "1. Automatically detect the language of the customer (Amharic, Afaan Oromo, English, Tigrinya, etc.) and respond fluently in that exact same language.\n"
+        "2. Answer strictly using the inventory/services data and pricing in ETB provided above.\n"
+        "3. Never invent unlisted prices or contact numbers.\n"
+        "4. When a customer wants to buy, book, or order, confirm their request and reassure them management has been notified."
     )
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
 
-    response_text = f"Welcome to {store_name}. How may we assist you today?"
+    response_text = f"እንኳን ወደ {store_name} በደህና መጡ! እንዴት ልንረዳዎ እንችላለን?"
     if groq_client:
         try:
             completion = groq_client.chat.completions.create(
@@ -787,7 +761,7 @@ async def store_chat_webhook(payload: dict):
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
-            response_text = f"Thank you for contacting {store_name}. We are processing your request. ({str(e)})"
+            response_text = f"መልእክትዎ ደርሶናል፣ እናመሰግናለን። ({str(e)})"
 
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -805,15 +779,15 @@ async def store_chat_webhook(payload: dict):
         except Exception:
             pass
 
-    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "phone", "book", "appointment", "join", "membership", "ግዛ", "ዋጋ", "ይግዙ", "መመዝገብ"]
+    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "book", "join", "ግዛ", "ዋጋ", "ይግዙ", "መመዝገብ", "እፈልጋለሁ"]
     if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
-        customer_handle = f"@{username}" if username != "Unknown User" else f"ID: {chat_id}"
+        customer_handle = f"@{username}" if username != "አልታወቀም" else f"ID: {chat_id}"
         alert_msg = (
-            f"🚨 *NEW HIGH-INTENT LEAD for {store_name} ({industry.capitalize()})!*\n\n"
-            f"👤 *Customer:* {first_name} ({customer_handle})\n"
-            f"💬 *Inquiry:* \"{user_text}\"\n\n"
-            f"🤖 *AI Receptionist Replied:* \"{response_text[:150]}...\"\n\n"
-            f"👉 *Action:* Reach out directly to close the deal!"
+            f"🚨 *አዲስ ጠቃሚ ደንበኛ (Lead) ለ {store_name}!* 🇪🇹\n\n"
+            f"👤 *ደንበኛ:* {first_name} ({customer_handle})\n"
+            f"💬 *ጥያቄ:* \"{user_text}\"\n\n"
+            f"🤖 *AI ምላሽ:* \"{response_text[:150]}...\"\n\n"
+            f"👉 እባክዎ በቀጥታ አግኙዋቸው!"
         )
         async with httpx.AsyncClient() as client:
             await client.post(
