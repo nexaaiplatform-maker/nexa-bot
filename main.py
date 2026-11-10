@@ -236,7 +236,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• *የሂሳብ ቁጥር:* `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🚨 *መመሪያ:*\n"
-        f"1. **በზክጭ `{exact_amount_etb} ብር`** ያስተላልፉ።\n"
+        f"1. **በዝክጭ `{exact_amount_etb} ብር`** ያስተላልፉ።\n"
         f"2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) ያንሱ።\n"
         f"3. ወዲያውኑ ለማረጋገጥ ደረሰኙን በዚህ ውይይት ውስጥ ይላኩ።"
     )
