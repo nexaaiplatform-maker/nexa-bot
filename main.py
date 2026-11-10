@@ -307,7 +307,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🇪🇹 *NEXA AI ቦት ፈጣሪ ረዳት*\n\n"
-        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እናገናኝ።\n\n"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እንገናኝ።\n\n"
         "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማነዉ? (ለምሳሌ: *ሀበሻ ፋሽን*)"
     )
     return STORE_NAME
