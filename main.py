@@ -197,7 +197,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bots_list_text += (
                 f"*{idx}. {store['store_name']}*\n"
                 f"• *Industry:* `{store.get('industry', 'General').capitalize()}`\n"
-                f"• *Persona:* `{store['ui_theme'].capitalize()}`\n"
+                f"• *Persona:* `{store.get('ui_theme', 'Executive').capitalize()}`\n"
                 f"• *Token Key:* `{masked_token}`\n"
                 f"• *Status:* Live & Synchronized ✅\n\n"
             )
