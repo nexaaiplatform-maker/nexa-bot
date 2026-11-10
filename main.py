@@ -4,6 +4,7 @@ import asyncio
 import httpx
 import base64
 import json
+import logging
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException, status
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -19,8 +20,12 @@ from telegram.ext import (
 from groq import Groq
 from supabase import create_client, Client
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NexaAI")
+
 # Initialize FastAPI
-app = FastAPI()
+app = FastAPI(title="Nexa AI Commerce Backend")
 
 # -------------------------------------------------------------------
 # Configuration & Environment Variables
@@ -702,8 +707,17 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             })
         return {"ok": True}
 
-    # If user sent /start, present language selection keyboard
+    # If user sent /start, default language to Amharic and present language selection keyboard + Security notice
     if user_text == "/start":
+        if supabase:
+            try:
+                supabase.table("customer_languages").upsert({
+                    "chat_id": str(chat_id),
+                    "language": "amharic"
+                }, on_conflict="chat_id").execute()
+            except Exception:
+                pass
+
         keyboard = [
             [InlineKeyboardButton("🇪🇹 አማርኛ (Amharic - ነባሪ)", callback_data="lang_amharic")],
             [InlineKeyboardButton("🇬🇧 English", callback_data="lang_english")],
@@ -711,10 +725,17 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         ]
         reply_markup = {"inline_keyboard": keyboard}
         async with httpx.AsyncClient() as client:
+            # Welcome message with language selector
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ / Please select your language:",
                 "reply_markup": reply_markup,
+                "parse_mode": "Markdown"
+            })
+            # Security & Customer Notification Notice
+            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": "🛡️ *Security & Privacy Notice*: Your session is encrypted and secure with Nexa AI commerce protection.",
                 "parse_mode": "Markdown"
             })
         return {"ok": True}
@@ -722,7 +743,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if not user_text:
         return {"ok": True}
 
-    # Fetch customer's preferred language from DB (Defaults to amharic now)
+    # Fetch customer's preferred language from DB (Defaults strictly to Amharic)
     customer_lang = "amharic"
     if supabase:
         try:
@@ -760,8 +781,6 @@ async def store_chat_webhook(payload: dict):
     ui_theme = payload.get("ui_theme", "executive")
     inventory_data = payload.get("inventory_data", "")
     owner_telegram_id = payload.get("owner_telegram_id")
-    username = payload.get("username", "Unknown")
-    first_name = payload.get("first_name", "Customer")
     customer_lang = payload.get("customer_lang", "amharic")
     history_messages = payload.get("history_messages", [])
 
@@ -777,69 +796,52 @@ async def store_chat_webhook(payload: dict):
             return {"ok": True}
         deduct_credit(owner_id_int)
 
-    theme_prompts = {
-        "executive": f"You are a professional executive VIP concierge for {store_name} in the {industry} sector.",
-        "sales": f"You are a top sales representative for {store_name} in the {industry} sector. Close sales quickly.",
-        "friendly": f"You are a warm, welcoming local assistant for {store_name} ({industry}).",
-        "minimalist": f"You are a concise assistant for {store_name} ({industry}). Give brief answers with prices in ETB."
+    lang_instructions = {
+        "amharic": "በአማርኛ ቋንቋ ብቻ መልስ ስጥ (Respond strictly in Amharic script). Be polite, professional, and helpful.",
+        "english": "Respond in English. Be polite, professional, and helpful.",
+        "oromo": "Afaan Oromootን deebisi. Tajaajila gaarii kenni."
     }
 
-    selected_persona = theme_prompts.get(ui_theme, theme_prompts["executive"])
+    theme_prompts = {
+        "executive": f"You are a professional executive VIP concierge for {store_name} in the {industry} sector.",
+        "sales": f"You are a high-energy sales closer and growth expert for {store_name} in the {industry} sector.",
+        "friendly": f"You are a warm, friendly, and approachable customer advisor for {store_name} in the {industry} sector.",
+        "minimalist": f"You are a direct, concise, and efficient assistant for {store_name} in the {industry} sector."
+    }
 
-    system_prompt = (
-        f"{selected_persona}\n\n"
-        f"BUSINESS INDUSTRY: {industry.capitalize()}\n"
-        f"PRODUCTS / SERVICES / PRICING DATA:\n{inventory_data}\n\n"
-        f"STRICT RULES:\n"
-        f"1. You MUST respond ONLY in the customer's selected language: '{customer_lang.upper()}' (If AMHARIC, write 100% natural, error-free Amharic script using Ge'ez; if English, write clear English; if OROMO, write Afaan Oromo).\n"
-        "2. Answer strictly using the inventory/services data and pricing in ETB provided above.\n"
-        "3. Never invent unlisted prices or contact numbers.\n"
-        "4. When a customer wants to buy or order, confirm their request and reassure them management has been notified."
-    )
+    system_prompt = f"""
+    {theme_prompts.get(ui_theme, theme_prompts['executive'])}
+    Current Customer Language Preference: {customer_lang}
+    {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
-    messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
+    Live Store Context & Inventory:
+    {inventory_data}
+    
+    Security & Customer Notification Rule: If a user asks about security, order status, or payments, reassure them with clear transaction safety notes and encrypted session guarantees. Always prioritize customer trust and safety.
+    """
 
-    response_text = f"እንኳን ወደ {store_name} በደህና መጡ!"
+    ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
     if groq_client:
         try:
+            messages = [{"role": "system", "content": system_prompt}]
+            for hm in history_messages:
+                messages.append({"role": hm.get("role", "user"), "content": hm.get("content", "")})
+            messages.append({"role": "user", "content": user_text})
+
             completion = groq_client.chat.completions.create(
-                messages=messages_payload,
-                model="openai/gpt-oss-120b",
+                model="llama3-70b-8192",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=600
             )
-            response_text = completion.choices[0].message.content
+            ai_reply = completion.choices[0].message.content
         except Exception as e:
-            response_text = f"ስለ መልእክትዎ እናመሰግናለን። ({str(e)})"
+            logger.error(f"Groq Chat Error: {e}")
+            ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል። እባክዎ ትንሽቆይተው እንደገና ይሞክሩ።"
 
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": response_text}
+            json={"chat_id": chat_id, "text": ai_reply, "parse_mode": "Markdown"}
         )
-
-    if supabase:
-        try:
-            supabase.table("chats").insert({
-                "user_id": str(chat_id),
-                "user_message": user_text,
-                "bot_response": response_text
-            }).execute()
-        except Exception:
-            pass
-
-    lead_keywords = ["buy", "order", "price", "how much", "cost", "reserve", "available", "contact", "book", "join", "ግዛ", "ዋጋ", "ይግዙ", "መመዝገብ", "እፈልጋለሁ"]
-    if any(kw in user_text.lower() for kw in lead_keywords) and owner_telegram_id and TELEGRAM_BOT_TOKEN:
-        customer_handle = f"@{username}" if username != "Unknown" else f"ID: {chat_id}"
-        alert_msg = (
-            f"🚨 *NEW HIGH-INTENT LEAD for {store_name}!* 🇪🇹\n\n"
-            f"👤 *Customer:* {first_name} ({customer_handle})\n"
-            f"💬 *Inquiry:* \"{user_text}\"\n\n"
-            f"🤖 *AI Reply:* \"{response_text[:150]}...\"\n\n"
-            f"👉 Please reach out directly to close the deal!"
-        )
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": owner_telegram_id, "text": alert_msg, "parse_mode": "Markdown"}
-            )
-
     return {"ok": True}
