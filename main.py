@@ -154,32 +154,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
-        status_text = "⭐ *Pro Member — Unlimited Multi-Bot Sales Machine Active*"
+        status_text = "⭐ *ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ*"
     elif has_access:
         status_text = (
-            f"🔥 *Free Trial Active (3 Days)*\n"
-            f"• *Expires:* `{expires_str}`\n"
-            f"• *AI Credits Left:* `{sub_data['credits_remaining']}`"
+            f"🔥 *የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)*\n"
+            f"• *የሚያበቃበት ጊዜ:* `{expires_str}`\n"
+            f"• *የቀሩ የAI ዕዳዎች:* `{sub_data['credits_remaining']}`"
         )
     else:
-        status_text = "⚠️ *Trial Expired* — Upgrade to Pro in Birr to keep your bots running."
+        status_text = "⚠️ *የሙከራ ጊዜዎ አልቋል* — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 *Welcome to Nexa AI Platform, {user.first_name}!*\n\n"
-        f"Deploy and manage multiple automated AI-powered Telegram bots instantly.\n\n"
-        f"📊 *Account Status:*\n{status_text}\n\n"
-        "🎯 *Quick Start Guide:*\n"
-        "1️⃣ /register - Launch or update an AI bot\n"
-        "2️⃣ /mybots - View and manage your deployed bots\n"
-        "3️⃣ /update - Update your inventory or services live\n"
-        "4️⃣ /summary - View real verified revenue and statistics"
+        f"🇪🇹 *እንኳን ወደ Nexa AI መድረክ ደህና መጡ, {user.first_name}!*\n\n"
+        f"ብዙ በ AI የተጎለበቱ የቴሌግራም ቦቶችን በቀላሉ ይፍጠሩ እና ያስተዳድሩ።\n\n"
+        f"📊 *የመለያዎ ሁኔታ:*\n{status_text}\n\n"
+        "🎯 *ፈጣን መመሪያ:*\n"
+        "1️⃣ /register - የ AI ቦት ይፍጠሩ ወይም ያሻሽሉ\n"
+        "2️⃣ /mybots - የፈጠሯቸውን ቦቶች ይመልከቱ\n"
+        "3️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ያሻሽሉ\n"
+        "4️⃣ /summary - ትክክለኛ ገቢዎችን እና መረጃዎችን ይመልከቱ"
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 Unlock Pro Status (Secure Birr)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🤖 Manage My Bots (/mybots)", callback_data="view_my_bots")],
-        [InlineKeyboardButton("📊 Live Revenue Summary (/summary)", callback_data="view_summary")],
-        [InlineKeyboardButton("💎 Launch New AI Bot (/register)", callback_data="start_register")]
+        [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (በብር)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
+        [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
+        [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
     await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -187,29 +187,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
     if not supabase:
-        await update.message.reply_text("Database connection inactive.")
+        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
         res = supabase.table("stores").select("store_name", "industry", "ui_theme", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
         if not res.data:
-            await update.message.reply_text("⚠️ You have no active bots deployed yet. Use /register to launch your first AI bot!")
+            await update.message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 *YOUR DEPLOYED AI BOTS DASHBOARD*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        bots_list_text = "🤖 *የእርስዎ የ AI ቦቶች ዳሽቦርድ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
             masked_token = store["bot_token"][:8] + "..." + store["bot_token"][-4:] if len(store["bot_token"]) > 12 else "***"
             bots_list_text += (
                 f"*{idx}. {store['store_name']}*\n"
-                f"• *Industry:* `{store.get('industry', 'General').capitalize()}`\n"
-                f"• *Persona:* `{store.get('ui_theme', 'Executive').capitalize()}`\n"
-                f"• *Token Key:* `{masked_token}`\n"
-                f"• *Status:* Live & Synchronized ✅\n\n"
+                f"• *የስራ ዘርፍ:* `{store.get('industry', 'General').capitalize()}`\n"
+                f"• *ባህሪ:* `{store.get('ui_theme', 'Executive').capitalize()}`\n"
+                f"• *ቶከን ቁልፍ:* `{masked_token}`\n"
+                f"• *ሁኔታ:* በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
-        bots_list_text += "🔒 *Security Note:* All bot tokens are securely isolated."
+        bots_list_text += "🔒 *የደህንነት ማስታወሻ:* ሁሉም የቦት ቶከኖች በጥብቅ የተጠበቁ ናቸው።"
         await update.message.reply_text(bots_list_text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error fetching bots: {str(e)}")
+        await update.message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
 
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,22 +227,22 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     invoice_text = (
-        f"🔒 *SECURE ENCRYPTED INVOICE*\n"
+        f"🔒 *ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *Invoice ID:* `{order_id}`\n"
-        f"• *Item:* Monthly Pro License (Multi-Bot Access)\n"
-        f"• *Exact Transfer Amount:* **{exact_amount_etb} ETB**\n"
-        f"• *Payment Gateway:* `{channel_name}`\n"
-        f"• *Account Reference:* `{masked_account}`\n"
+        f"• *የደረሰኝ ቁጥር:* `{order_id}`\n"
+        f"• *አገልግሎት:* ወርሃዊ ፕሮ ፈቃድ\n"
+        f"• *ትክክለኛ የክፍያ መጠን:* **{exact_amount_etb} ብር**\n"
+        f"• *የክፍያ መንገድ:* `{channel_name}`\n"
+        f"• *የሂሳብ ቁጥር:* `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🚨 *Instructions:*\n"
-        f"1. Transfer **EXACTLY `{exact_amount_etb} ETB`**.\n"
-        f"2. Take a screenshot of your successful transaction receipt.\n"
-        f"3. Send the screenshot right here in this chat for instant verification."
+        f"🚨 *መመሪያ:*\n"
+        f"1. **በზክጭ `{exact_amount_etb} ብር`** ያስተላልፉ።\n"
+        f"2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) ያንሱ።\n"
+        f"3. ወዲያውኑ ለማረጋገጥ ደረሰኙን በዚህ ውይይት ውስጥ ይላኩ።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("✅ I Have Paid — Upload Receipt", callback_data="upload_receipt")]
+        [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
     
     await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -261,13 +261,13 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     summary_text = (
-        f"📊 *FINANCIAL & BUSINESS SUMMARY*\n"
+        f"📊 *የገቢ እና የንግድ ማጠቃለያ*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *Total Verified Subscriptions:* `{total_subscribers}` users\n"
-        f"• *Total Verified Revenue:* `{total_revenue:,.2f} ETB`\n"
-        f"• *Active AI Assistants:* 24/7 Online ✅\n"
+        f"• *የተረጋገጡ አባላት:* `{total_subscribers}` ተጠቃሚዎች\n"
+        f"• *አጠቃላይ የተረጋገጠ ገቢ:* `{total_revenue:,.2f} ብር`\n"
+        f"• *ንቁ የ AI ረዳቶች:* 24/7 በመስመር ላይ ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎯 Your AI bots are actively processing customer inquiries."
+        f"🎯 የ AI ቦቶችዎ የደንበኞችን ጥያቄዎች በንቃት እየተከታተሉ ነው።"
     )
     await update.message.reply_text(summary_text, parse_mode="Markdown")
 
@@ -278,37 +278,37 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.message.reply_text(
-            "⚠️ *How to update your inventory or services live:*\n\n"
-            "Type `/update` followed by your details.\n\n"
-            "*Example:*\n"
-            "`/update Item 1: Shoes - 2,500 ETB\nItem 2: Jacket - 3,200 ETB`",
+            "⚠️ *ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ማሻሻል:*\n\n"
+            " `/update` ብለው በመቀጠል ዝርዝር መረጃዎን ይጻፉ።\n\n"
+            "*ምሳሌ:*\n"
+            "`/update እቃ 1: ጫማ - 2,500 ብር\nእቃ 2: ጃኬት - 3,200 ብር`",
             parse_mode="Markdown"
         )
         return
 
     if not supabase:
-        await update.message.reply_text("Database connection inactive.")
+        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
         res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
         if res.data:
             await update.message.reply_text(
-                "✅ *Updated Live Across All Your Bots Instantly!*\n\nYour AI receptionists are now responding with your updated pricing and details immediately.",
+                "✅ *በሁሉም ቦቶችዎ ላይ በቅጽበት ተሻሽሏል!*\n\nየእርስዎ የ AI ረዳቶች አዲሱን ዋጋ እና መረጃ ለደንበኞች ወዲያውኑ ምላሽ እየሰጡበት ነው።",
                 parse_mode="Markdown"
             )
         else:
-            await update.message.reply_text("⚠️ No active store found. Please use /register first.")
+            await update.message.reply_text("⚠️ ምንም ንቁ መደብር አልተገኘም። እባክዎ መጀመሪያ /register ይጠቀሙ።")
     except Exception as e:
-        await update.message.reply_text(f"Update failed: {str(e)}")
+        await update.message.reply_text(f"ማሻሻል አልተሳካም: {str(e)}")
 
 
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🇪🇹 *NEXA AI BOT BUILDER WIZARD*\n\n"
-        "Let's deploy or reconnect your automated Telegram AI bot in a few simple steps.\n\n"
-        "Step 1 of 4: What is the official name of your business, store, or service? (e.g., *Habesha Fashion*)"
+        "🇪🇹 *NEXA AI ቦት ፈጣሪ ረዳት*\n\n"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እናገናኝ።\n\n"
+        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማነዉ? (ለምሳሌ: *ሀበሻ ፋሽን*)"
     )
     return STORE_NAME
 
@@ -317,18 +317,18 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["store_name"] = update.message.text
     
     keyboard = [
-        [InlineKeyboardButton("🛍️ Retail & Physical Products", callback_data="ind_retail")],
-        [InlineKeyboardButton("🏋️ Fitness & Wellness Services", callback_data="ind_fitness")],
-        [InlineKeyboardButton("🏠 Real Estate & Property", callback_data="ind_realestate")],
-        [InlineKeyboardButton("🩺 Healthcare & Clinic", callback_data="ind_clinic")],
-        [InlineKeyboardButton("🤝 Agency & Brokerage", callback_data="ind_broker")],
-        [InlineKeyboardButton("⚙️ General Services", callback_data="ind_general")]
+        [InlineKeyboardButton("🛍️ ቸርቻሪ እና እቃዎች", callback_data="ind_retail")],
+        [InlineKeyboardButton("🏋️ ጤና እና የአካል ብቃት", callback_data="ind_fitness")],
+        [InlineKeyboardButton("🏠 የቤት እና ንብረት ሽያጭ", callback_data="ind_realestate")],
+        [InlineKeyboardButton("🩺 ህክምና እና ክሊኒክ", callback_data="ind_clinic")],
+        [InlineKeyboardButton("🤝 ኤጀንሲ እናደላላ", callback_data="ind_broker")],
+        [InlineKeyboardButton("⚙️ አጠቃላይ አገልግሎቶች", callback_data="ind_general")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"Business Name Recorded: *{update.message.text}*.\n\n"
-        "Step 2 of 4: Select your primary industry sector:",
+        f"የንግድ ስም ተመዝግቧል: *{update.message.text}*.\n\n"
+        "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -349,16 +349,16 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["industry"] = chosen_industry
 
     keyboard = [
-        [InlineKeyboardButton("💎 Luxury Executive (Elite)", callback_data="theme_executive")],
-        [InlineKeyboardButton("⚡ High-Energy Sales (Closer)", callback_data="theme_sales")],
-        [InlineKeyboardButton("🌿 Friendly Advisor (Warm)", callback_data="theme_friendly")],
-        [InlineKeyboardButton("🎯 Direct Minimalist (Concise)", callback_data="theme_minimalist")]
+        [InlineKeyboardButton("💎 ቪአይፒ ኤክስክሉቲቭ", callback_data="theme_executive")],
+        [InlineKeyboardButton("⚡ ከፍተኛ ሽያጭ አቅጣጫ", callback_data="theme_sales")],
+        [InlineKeyboardButton("🌿 ወዳጃዊ አማካሪ", callback_data="theme_friendly")],
+        [InlineKeyboardButton("🎯 ቀጥተኛ እና አጭር", callback_data="theme_minimalist")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"Industry Selected: *{chosen_industry.capitalize()}*.\n\n"
-        "Step 3 of 4: Choose how your AI assistant should talk to customers:",
+        f"የተመረጠው ዘርፍ: *{chosen_industry.capitalize()}*.\n\n"
+        "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -388,7 +388,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ui_theme"] = chosen_theme
     
     await target_message(
-        "Step 4 of 4: Paste your complete inventory, service packages, or pricing in ETB below:",
+        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን ወይም የዋጋ ዝርዝርዎን ከታች ይለጥፉ:",
         parse_mode="Markdown"
     )
     return INVENTORY
@@ -397,8 +397,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.message.text
     await update.message.reply_text(
-        "Almost done!\n\n"
-        "Go to Telegram's official **@BotFather**, create a bot (`/newbot`), copy your unique **Bot Token**, and paste it right here:",
+        "ሊጠናቀቅ ነው።!\n\n"
+        "ወደ ኦፊሴላዊው የቴሌግራም **@BotFather** ይሂዱ፣ ቦት ይፍጠሩ (`/newbot`)፣ ልዩ **የቦት ቶከን** ይውሰዱ እና እዚህ ይለጥፉ:",
         parse_mode="Markdown"
     )
     return BOT_TOKEN
@@ -431,21 +431,21 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "inventory_data": inventory_data
             }, on_conflict="bot_token").execute()
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Warning saving to database: {str(e)}")
+            await update.message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
 
     success_msg = (
-        f"🎉 *CONGRATULATIONS! YOUR AI BOT IS LIVE!* 🇪🇹🚀\n\n"
-        f"• *Business Name:* {store_name}\n"
-        f"• *Industry:* {industry.capitalize()}\n"
-        f"• *Status:* Synchronized & Active ✅\n\n"
-        "Your bot is now fully operational."
+        f"🎉 *እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል!* 🇪🇹🚀\n\n"
+        f"• *የንግድ ስም:* {store_name}\n"
+        f"• *ዘርፍ:* {industry.capitalize()}\n"
+        f"• *ሁኔታ:* ተገናኝቷል እና ንቁ ነው ✅\n\n"
+        "ቦትዎ አሁን ሙሉ በሙሉ አገልግሎት ለመስጠት ዝግጁ ነው።"
     )
     await update.message.reply_text(success_msg, parse_mode="Markdown")
     return ConversationHandler.END
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Registration cancelled. Type /register whenever you are ready.")
+    await update.message.reply_text("❌ ምዝገባው ተሰርዟል። ዝግጁ ሲሆኑ /register የሚለውን ይጠቀሙ።")
     return ConversationHandler.END
 
 
@@ -461,9 +461,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "view_my_bots":
         await my_bots_command(update, context)
     elif query.data == "start_register":
-        await query.message.reply_text("Please use the /register command to begin.")
+        await query.message.reply_text("እባክዎ ለመጀመር /register ትዕዛዝ ይጠቀሙ።")
     elif query.data == "upload_receipt":
-        await query.message.reply_text("📸 Please upload your payment receipt screenshot now.")
+        await query.message.reply_text("📸 እባክዎ የክፍያ ደረሰኝ ፎቶ (Screenshot) ይላኩ።")
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -471,7 +471,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     order = pending_orders.get(user_id)
     
     if not order:
-        await update.message.reply_text("❌ No active pending order found. Type /upgrade first.")
+        await update.message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ይጠቀሙ።")
         return
 
     photo_file = await update.message.photo[-1].get_file()
@@ -515,7 +515,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
             if existing_tx.data:
                 await update.message.reply_text(
-                    f"🚫 *SECURITY ALERT: RECEIPT REUSE DETECTED!*\n\nTransaction ID `{ref_id}` has already been redeemed.",
+                    f"🚫 *የደህንነት ማስጠንቀቂያ: ደረሰኝ ተደጋግሞ ጥቅም ላይ ውሏል!*\n\nየግብይት መለያ `{ref_id}` ከዚህ በፊት ጥቅም ላይ ውሏል።",
                     parse_mode="Markdown"
                 )
                 return
@@ -558,14 +558,14 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         })
 
         await update.message.reply_text(
-            f"✅ *PAYMENT VERIFIED & PRO UNLOCKED!* ⭐🇪🇹\n\n"
-            f"• *Ref ID:* `{ref_id}`\n"
-            f"• *Status:* Unlimited Pro Access Active!",
+            f"✅ *ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል!* ⭐🇪🇹\n\n"
+            f"• *የግብይት መለያ:* `{ref_id}`\n"
+            f"• *ሁኔታ:* ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!",
             parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
-            f"📥 *Receipt Logged for Review*\n\nCould not auto-verify receipt. An admin has been notified.",
+            f"📥 *ደረሰኙ ለግምገማ ተመዝግቧል*\n\nበራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው ታይቶለታል።",
             parse_mode="Markdown"
         )
 
@@ -652,7 +652,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
 
     data = await request.json()
     
-    # Handle Callback Queries (Language Selection Clicks)
     if "callback_query" in data:
         cq = data["callback_query"]
         chat_id = cq["message"]["chat"]["id"]
@@ -661,7 +660,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         if callback_data.startswith("lang_"):
             lang = callback_data.replace("lang_", "")
             
-            # Save or update customer language preference in Supabase
             if supabase:
                 try:
                     supabase.table("customer_languages").upsert({
@@ -707,7 +705,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             })
         return {"ok": True}
 
-    # If user sent /start, default language to Amharic and present language selection keyboard + Security notice
     if user_text == "/start":
         if supabase:
             try:
@@ -725,14 +722,12 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         ]
         reply_markup = {"inline_keyboard": keyboard}
         async with httpx.AsyncClient() as client:
-            # Welcome message with language selector (Pure Amharic default - zero English)
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
                 "reply_markup": reply_markup,
                 "parse_mode": "Markdown"
             })
-            # Security & Customer Notification Notice (Pure Amharic local text)
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": "🛡️ *የደህንነት ማስታወሻ*: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።",
@@ -743,7 +738,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if not user_text:
         return {"ok": True}
 
-    # Fetch customer's preferred language from DB (Defaults strictly to Amharic)
     customer_lang = "amharic"
     if supabase:
         try:
