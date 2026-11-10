@@ -60,11 +60,11 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Pure Amharic Default is live"}
+    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with AI-Powered Dashboard & Analytics is live"}
 
 
 # -------------------------------------------------------------------
-# Core Logic: Persistent Trial & Credit Engine (Supabase Backed)
+# Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
 # -------------------------------------------------------------------
 def get_or_create_user_subscription(user_id: int) -> dict:
     now = datetime.now()
@@ -121,6 +121,17 @@ def deduct_credit(user_id: int):
                 pass
 
 
+def log_visitor(user_id: int):
+    if supabase:
+        try:
+            supabase.table("store_visitors").upsert({
+                "user_id": str(user_id),
+                "last_visit": datetime.now().isoformat()
+            }, on_conflict="user_id").execute()
+        except Exception:
+            pass
+
+
 # -------------------------------------------------------------------
 # Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
 # -------------------------------------------------------------------
@@ -143,11 +154,12 @@ def select_optimal_payout_destination() -> tuple[str, str, int, str]:
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands
+# Telegram Master Bot Handlers & Commands (AI-Powered Dashboard)
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
+    log_visitor(user_id)
     
     sub_data = get_or_create_user_subscription(user_id)
     has_access = verify_active_access(user_id)
@@ -165,20 +177,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⚠️ *የሙከራ ጊዜዎ አልቋል* — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 *እንኳን ወደ Nexa AI መድረክ ደህና መጡ, {user.first_name}!*\n\n"
-        f"ብዙ በ AI የተጎለበቱ የቴሌግራም ቦቶችን በቀላሉ ይፍጠሩ እና ያስተዳድሩ።\n\n"
+        f"🇪🇹 *እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!*\n\n"
+        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ *'ቦቶቼን አሳየኝ'* ወይም *'ገቢዬን ማየት እፈልጋለሁ'*)\n\n"
         f"📊 *የመለያዎ ሁኔታ:*\n{status_text}\n\n"
         "🎯 *ፈጣን መመሪያ:*\n"
-        "1️⃣ /register - የ AI ቦት ይፍጠሩ ወይም ያሻሽሉ\n"
-        "2️⃣ /mybots - የፈጠሯቸውን ቦቶች ይመልከቱ\n"
-        "3️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ያሻሽሉ\n"
-        "4️⃣ /summary - ትክክለኛ ገቢዎችን እና መረጃዎችን ይመልከቱ"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
+        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት"
     )
     
     keyboard = [
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (በብር)", callback_data="buy_pro")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
+        [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
     await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -251,25 +264,89 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_revenue = 0
     total_subscribers = 0
+    total_visitors = 0
+    top_payers = []
+
     if supabase:
         try:
-            res = supabase.table("paid_subscriptions").select("amount_etb").execute()
-            if res.data:
-                total_revenue = sum(float(tx["amount_etb"]) for tx in res.data)
-                total_subscribers = len(res.data)
-        except Exception:
-            pass
+            rev_res = supabase.table("paid_subscriptions").select("user_id", "amount_etb", "created_at").execute()
+            if rev_res.data:
+                total_revenue = sum(float(tx["amount_etb"]) for tx in rev_res.data)
+                total_subscribers = len(rev_res.data)
+                
+                # Calculate Top Payers
+                payer_totals = {}
+                for tx in rev_res.data:
+                    uid = tx["user_id"]
+                    payer_totals[uid] = payer_totals.get(uid, 0) + float(tx["amount_etb"])
+                
+                sorted_payers = sorted(payer_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+                top_payers = sorted_payers
+
+            vis_res = supabase.table("store_visitors").select("user_id", count="exact").execute()
+            if vis_res.count is not None:
+                total_visitors = vis_res.count
+            elif vis_res.data:
+                total_visitors = len(vis_res.data)
+        except Exception as e:
+            logger.error(f"Summary fetch error: {e}")
+
+    top_payers_text = ""
+    for idx, (uid, amt) in enumerate(top_payers, 1):
+        top_payers_text += f"{idx}. መለያ `{uid}` — *{amt:,.2f} ብር*\n"
+
+    if not top_payers_text:
+        top_payers_text = "እስካሁን የተመዘገበ ከፋይ የለም።"
 
     summary_text = (
-        f"📊 *የገቢ እና የንግድ ማጠቃለያ*\n"
+        f"📊 *አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *የተረጋገጡ አባላት:* `{total_subscribers}` ተጠቃሚዎች\n"
+        f"• *አጠቃላይ የቦት ጎብኚዎች:* `{total_visitors}` ተጠቃሚዎች\n"
+        f"• *የተረጋገጡ ከፋዮች/አባላት:* `{total_subscribers}` ተጠቃሚዎች\n"
         f"• *አጠቃላይ የተረጋገጠ ገቢ:* `{total_revenue:,.2f} ብር`\n"
         f"• *ንቁ የ AI ረዳቶች:* 24/7 በመስመር ላይ ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎯 የ AI ቦቶችዎ የደንበኞችን ጥያቄዎች በንቃት እየተከታተሉ ነው።"
+        f"🏆 *ከፍተኛ ከፋዮች (Top Payers):*\n{top_payers_text}"
     )
     await update.message.reply_text(summary_text, parse_mode="Markdown")
+
+
+async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+    weekly_revenue = 0
+    weekly_subscribers = 0
+    weekly_visitors = 0
+
+    if supabase:
+        try:
+            rev_res = supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+            if rev_res.data:
+                for tx in rev_res.data:
+                    tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
+                    if tx_date >= week_ago:
+                        weekly_revenue += float(tx["amount_etb"])
+                        weekly_subscribers += 1
+
+            vis_res = supabase.table("store_visitors").select("last_visit").execute()
+            if vis_res.data:
+                for vis in vis_res.data:
+                    vis_date = datetime.fromisoformat(vis["last_visit"].replace("Z", "+00:00").split("+")[0])
+                    if vis_date >= week_ago:
+                        weekly_visitors += 1
+        except Exception as e:
+            logger.error(f"Weekly summary error: {e}")
+
+    weekly_text = (
+        f"📈 *የሳምንቱ አጠቃላይ ሪፖርት (Weekly Summary)*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• *በዚህ ሳምንት የጎብኚዎች ቁጥር:* `{weekly_visitors}` አዲስ ተጠቃሚዎች\n"
+        f"• *በዚህ ሳምንት የተመዘገቡ አባላት:* `{weekly_subscribers}` ተጠቃሚዎች\n"
+        f"• *የሳምንቱ አጠቃላይ ገቢ:* `{weekly_revenue:,.2f} ብር`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💡 ጠቃሚ ምክር: የንግድዎን ሽያጭ ለማሳደግ ዕቃዎችዎን በ `/update` ማሻሻልዎን አይርሱ!"
+    )
+    await update.message.reply_text(weekly_text, parse_mode="Markdown")
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -458,6 +535,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await upgrade_command(update, context)
     elif query.data == "view_summary":
         await summary_command(update, context)
+    elif query.data == "view_weekly":
+        await weekly_summary_command(update, context)
     elif query.data == "view_my_bots":
         await my_bots_command(update, context)
     elif query.data == "start_register":
@@ -570,6 +649,57 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+# --- AI-Powered Master Bot Natural Language Router ---
+async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    user_id = update.effective_user.id
+    
+    if not user_text or user_text.startswith("/"):
+        return
+
+    # Use Groq AI to understand user intent naturally
+    system_prompt = (
+        "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
+        "Classify intent into one of these categories: "
+        "1. 'mybots' (if they want to see their bots) "
+        "2. 'summary' (if they want revenue, stats, or summary) "
+        "3. 'weekly' (if they want weekly reports) "
+        "4. 'register' (if they want to create a bot) "
+        "5. 'upgrade' (if they want to pay or upgrade to pro) "
+        "6. 'general' (if it's a general question or greeting) "
+        "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic\"}"
+    )
+
+    intent_result = {"intent": "general", "reply": "ሰላም! እንዴት ልረዳዎ እችላለሁ? ከላይ ያሉትን ትዕዛዞች መጠቀም ይችላሉ።"}
+    if groq_client:
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ]
+            )
+            intent_result = json.loads(response.choices[0].message.content)
+        except Exception:
+            pass
+
+    intent = intent_result.get("intent")
+    if intent == "mybots":
+        await my_bots_command(update, context)
+    elif intent == "summary":
+        await summary_command(update, context)
+    elif intent == "weekly":
+        await weekly_summary_command(update, context)
+    elif intent == "register":
+        await update.message.reply_text("አዲስ ቦት ለመፍጠር እባክዎ /register የሚለውን ይጠቀሙ።")
+    elif intent == "upgrade":
+        await upgrade_command(update, context)
+    else:
+        await update.message.reply_text(intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?"))
+
+
 # --- Handlers Registration ---
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
@@ -593,10 +723,12 @@ telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
+telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
 telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
 telegram_app.add_handler(conv_handler)
 telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
 
 
 # --- FastAPI Webhook Lifecycle & Tenant Routing ---
@@ -835,7 +967,7 @@ async def store_chat_webhook(payload: dict):
 
     async with httpx.AsyncClient() as client:
         await client.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            f"https://api.telegram.text/bot{bot_token}/sendMessage" if False else f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={"chat_id": chat_id, "text": ai_reply, "parse_mode": "Markdown"}
         )
     return {"ok": True}
