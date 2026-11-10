@@ -55,7 +55,7 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Multi-Language Support is live"}
+    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Amharic Default is live"}
 
 
 # -------------------------------------------------------------------
@@ -652,10 +652,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         cq = data["callback_query"]
         chat_id = cq["message"]["chat"]["id"]
         callback_data = cq["data"]
-        from_user = cq["from"]
-        first_name = from_user.get("first_name", "Customer")
-        username = from_user.get("username", "Unknown")
-
+        
         if callback_data.startswith("lang_"):
             lang = callback_data.replace("lang_", "")
             
@@ -674,12 +671,10 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                 "english": "🇬🇧 Welcome to our store! How may we assist you today?",
                 "oromo": "🇪🇹 Akkam! Baga nagaan dhuftan. Akkamitti si gargaaruu dandeenya?"
             }
-            greeting = lang_greetings.get(lang, "Welcome! How can we help you?")
+            greeting = lang_greetings.get(lang, "ሰላም! እንዴት ልንረዳዎ እንችላለን?")
 
             async with httpx.AsyncClient() as client:
-                # Answer callback query to remove loading spinner
                 await client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
-                # Send confirmation message
                 await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={"chat_id": chat_id, "text": greeting})
             return {"ok": True}
 
@@ -703,14 +698,14 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id, 
-                "text": "Store configuration not found."
+                "text": "መደብሩ አልተገኘም (Store configuration not found)."
             })
         return {"ok": True}
 
     # If user sent /start, present language selection keyboard
     if user_text == "/start":
         keyboard = [
-            [InlineKeyboardButton("🇪🇹 አማርኛ (Amharic)", callback_data="lang_amharic")],
+            [InlineKeyboardButton("🇪🇹 አማርኛ (Amharic - ነባሪ)", callback_data="lang_amharic")],
             [InlineKeyboardButton("🇬🇧 English", callback_data="lang_english")],
             [InlineKeyboardButton("🇪🇹 Afaan Oromo", callback_data="lang_oromo")]
         ]
@@ -718,7 +713,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": f"🇪🇹 Welcome to *{store.get('store_name')}*!\n\nPlease select your preferred language / ቋንቋ ይምረጡ:",
+                "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ / Please select your language:",
                 "reply_markup": reply_markup,
                 "parse_mode": "Markdown"
             })
@@ -727,8 +722,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if not user_text:
         return {"ok": True}
 
-    # Fetch customer's preferred language from DB
-    customer_lang = "english"
+    # Fetch customer's preferred language from DB (Defaults to amharic now)
+    customer_lang = "amharic"
     if supabase:
         try:
             lang_res = supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).execute()
@@ -767,7 +762,7 @@ async def store_chat_webhook(payload: dict):
     owner_telegram_id = payload.get("owner_telegram_id")
     username = payload.get("username", "Unknown")
     first_name = payload.get("first_name", "Customer")
-    customer_lang = payload.get("customer_lang", "english")
+    customer_lang = payload.get("customer_lang", "amharic")
     history_messages = payload.get("history_messages", [])
 
     if owner_telegram_id:
@@ -777,7 +772,7 @@ async def store_chat_webhook(payload: dict):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={"chat_id": chat_id, "text": "⚠️ This bot's trial has expired. Owner needs to renew Pro access."}
+                    json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። ባለቤቱ ፓኬጁን ማደስ አለበት።"}
                 )
             return {"ok": True}
         deduct_credit(owner_id_int)
@@ -796,7 +791,7 @@ async def store_chat_webhook(payload: dict):
         f"BUSINESS INDUSTRY: {industry.capitalize()}\n"
         f"PRODUCTS / SERVICES / PRICING DATA:\n{inventory_data}\n\n"
         f"STRICT RULES:\n"
-        f"1. You MUST respond ONLY in the customer's selected language: '{customer_lang.upper()}' (e.g., if Amharic, write flawless Ge'ez script Amharic without spelling errors; if English, write clear English).\n"
+        f"1. You MUST respond ONLY in the customer's selected language: '{customer_lang.upper()}' (If AMHARIC, write 100% natural, error-free Amharic script using Ge'ez; if English, write clear English; if OROMO, write Afaan Oromo).\n"
         "2. Answer strictly using the inventory/services data and pricing in ETB provided above.\n"
         "3. Never invent unlisted prices or contact numbers.\n"
         "4. When a customer wants to buy or order, confirm their request and reassure them management has been notified."
@@ -804,7 +799,7 @@ async def store_chat_webhook(payload: dict):
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
 
-    response_text = f"Welcome to {store_name}!"
+    response_text = f"እንኳን ወደ {store_name} በደህና መጡ!"
     if groq_client:
         try:
             completion = groq_client.chat.completions.create(
@@ -813,7 +808,7 @@ async def store_chat_webhook(payload: dict):
             )
             response_text = completion.choices[0].message.content
         except Exception as e:
-            response_text = f"Thank you for your message. ({str(e)})"
+            response_text = f"ስለ መልእክትዎ እናመሰግናለን። ({str(e)})"
 
     async with httpx.AsyncClient() as client:
         await client.post(
