@@ -55,7 +55,7 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine is live"}
+    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with Multi-Language Support is live"}
 
 
 # -------------------------------------------------------------------
@@ -646,6 +646,43 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid secret token")
 
     data = await request.json()
+    
+    # Handle Callback Queries (Language Selection Clicks)
+    if "callback_query" in data:
+        cq = data["callback_query"]
+        chat_id = cq["message"]["chat"]["id"]
+        callback_data = cq["data"]
+        from_user = cq["from"]
+        first_name = from_user.get("first_name", "Customer")
+        username = from_user.get("username", "Unknown")
+
+        if callback_data.startswith("lang_"):
+            lang = callback_data.replace("lang_", "")
+            
+            # Save or update customer language preference in Supabase
+            if supabase:
+                try:
+                    supabase.table("customer_languages").upsert({
+                        "chat_id": str(chat_id),
+                        "language": lang
+                    }, on_conflict="chat_id").execute()
+                except Exception:
+                    pass
+
+            lang_greetings = {
+                "amharic": "🇪🇹 ሰላም! እንኳን ወደ መደብራችን በደህና መጡ። እንዴት ልንረዳዎ እንችላለን?",
+                "english": "🇬🇧 Welcome to our store! How may we assist you today?",
+                "oromo": "🇪🇹 Akkam! Baga nagaan dhuftan. Akkamitti si gargaaruu dandeenya?"
+            }
+            greeting = lang_greetings.get(lang, "Welcome! How can we help you?")
+
+            async with httpx.AsyncClient() as client:
+                # Answer callback query to remove loading spinner
+                await client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
+                # Send confirmation message
+                await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={"chat_id": chat_id, "text": greeting})
+            return {"ok": True}
+
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
@@ -653,7 +690,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     username = from_user.get("username", "Unknown")
     first_name = from_user.get("first_name", "Customer")
     
-    if not chat_id or not user_text:
+    if not chat_id:
         return {"ok": True}
 
     store = None
@@ -670,6 +707,36 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             })
         return {"ok": True}
 
+    # If user sent /start, present language selection keyboard
+    if user_text == "/start":
+        keyboard = [
+            [InlineKeyboardButton("🇪🇹 አማርኛ (Amharic)", callback_data="lang_amharic")],
+            [InlineKeyboardButton("🇬🇧 English", callback_data="lang_english")],
+            [InlineKeyboardButton("🇪🇹 Afaan Oromo", callback_data="lang_oromo")]
+        ]
+        reply_markup = {"inline_keyboard": keyboard}
+        async with httpx.AsyncClient() as client:
+            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": f"🇪🇹 Welcome to *{store.get('store_name')}*!\n\nPlease select your preferred language / ቋንቋ ይምረጡ:",
+                "reply_markup": reply_markup,
+                "parse_mode": "Markdown"
+            })
+        return {"ok": True}
+
+    if not user_text:
+        return {"ok": True}
+
+    # Fetch customer's preferred language from DB
+    customer_lang = "english"
+    if supabase:
+        try:
+            lang_res = supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).execute()
+            if lang_res.data:
+                customer_lang = lang_res.data[0]["language"]
+        except Exception:
+            pass
+
     payload = {
         "chat_id": chat_id,
         "user_text": user_text,
@@ -681,6 +748,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "owner_telegram_id": store.get("owner_telegram_id"),
         "username": username,
         "first_name": first_name,
+        "customer_lang": customer_lang,
         "history_messages": []
     }
     
@@ -699,6 +767,7 @@ async def store_chat_webhook(payload: dict):
     owner_telegram_id = payload.get("owner_telegram_id")
     username = payload.get("username", "Unknown")
     first_name = payload.get("first_name", "Customer")
+    customer_lang = payload.get("customer_lang", "english")
     history_messages = payload.get("history_messages", [])
 
     if owner_telegram_id:
@@ -714,22 +783,10 @@ async def store_chat_webhook(payload: dict):
         deduct_credit(owner_id_int)
 
     theme_prompts = {
-        "executive": (
-            f"You are a professional executive VIP concierge for {store_name} in the {industry} sector. "
-            "Maintain a polite, elite, and prestigious tone."
-        ),
-        "sales": (
-            f"You are a top sales representative for {store_name} in the {industry} sector. "
-            "Be enthusiastic, helpful, and close sales quickly."
-        ),
-        "friendly": (
-            f"You are a warm, welcoming local assistant for {store_name} ({industry}). "
-            "Speak naturally and make clients feel completely at home."
-        ),
-        "minimalist": (
-            f"You are a concise assistant for {store_name} ({industry}). "
-            "Give brief, clear, direct answers with prices in ETB."
-        )
+        "executive": f"You are a professional executive VIP concierge for {store_name} in the {industry} sector.",
+        "sales": f"You are a top sales representative for {store_name} in the {industry} sector. Close sales quickly.",
+        "friendly": f"You are a warm, welcoming local assistant for {store_name} ({industry}).",
+        "minimalist": f"You are a concise assistant for {store_name} ({industry}). Give brief answers with prices in ETB."
     }
 
     selected_persona = theme_prompts.get(ui_theme, theme_prompts["executive"])
@@ -738,16 +795,16 @@ async def store_chat_webhook(payload: dict):
         f"{selected_persona}\n\n"
         f"BUSINESS INDUSTRY: {industry.capitalize()}\n"
         f"PRODUCTS / SERVICES / PRICING DATA:\n{inventory_data}\n\n"
-        f"RULES:\n"
-        "1. Automatically detect the language of the customer (Amharic, Afaan Oromo, English, Tigrinya, etc.) and respond fluently in that exact same language.\n"
+        f"STRICT RULES:\n"
+        f"1. You MUST respond ONLY in the customer's selected language: '{customer_lang.upper()}' (e.g., if Amharic, write flawless Ge'ez script Amharic without spelling errors; if English, write clear English).\n"
         "2. Answer strictly using the inventory/services data and pricing in ETB provided above.\n"
         "3. Never invent unlisted prices or contact numbers.\n"
-        "4. When a customer wants to buy, book, or order, confirm their request and reassure them management has been notified."
+        "4. When a customer wants to buy or order, confirm their request and reassure them management has been notified."
     )
     
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": user_text}]
 
-    response_text = f"Welcome to {store_name}! How may we assist you today?"
+    response_text = f"Welcome to {store_name}!"
     if groq_client:
         try:
             completion = groq_client.chat.completions.create(
