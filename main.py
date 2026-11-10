@@ -164,7 +164,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⚠️ *የሙከራ ጊዜዎ አልቋል* — ቦቶችዎ እንዳይቆሙ በብር ክፍያ ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 *እንኳን ወደ 넥ሳ AI (Nexa AI) የንግድ ማዕከል በደህና መጡ፣ {user.first_name}!*\n\n"
+        f"🇪🇹 *እንኳን ወደ ኔክሳ AI (Nexa AI) የንግድ ማዕከል በደህና መጡ፣ {user.first_name}!*\n\n"
         f"ለማንኛውም የንግድ ዘርፍ የሚሆን አውቶማቲክ የቴሌግራም AI ረዳት ቦት በቀላሉ ያዋቅሩ።\n\n"
         f"📊 *የመለያዎ ሁኔታ:*\n{status_text}\n\n"
         "🎯 *ፈጣን መመሪያ:*\n"
