@@ -166,21 +166,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
-        status_text = "⭐ *ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ*"
+        status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
     elif has_access:
         status_text = (
-            f"🔥 *የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)*\n"
-            f"• *የሚያበቃበት ጊዜ:* `{expires_str}`\n"
-            f"• *የቀሩ የAI ዕዳዎች:* `{sub_data['credits_remaining']}`"
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
+            f"• የሚያበቃበት ጊዜ: {expires_str}\n"
+            f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
         )
     else:
-        status_text = "⚠️ *የሙከራ ጊዜዎ አልቋል* — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
+        status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 *እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!*\n\n"
-        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ *'ቦቶቼን አሳየኝ'* ወይም *'ገቢዬን ማየት እፈልጋለሁ'*)\n\n"
-        f"📊 *የመለያዎ ሁኔታ:*\n{status_text}\n\n"
-        "🎯 *ፈጣን መመሪያ:*\n"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
+        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ 'ቦቶቼን አሳየኝ' ወይም 'ገቢዬን ማየት እፈልጋለሁ')\n\n"
+        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
+        "🎯 ፈጣን መመሪያ:\n"
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
         "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
         "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
@@ -194,7 +194,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
-    await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,18 +209,18 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 *የእርስዎ የ AI ቦቶች ዳሽቦርድ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
             masked_token = store["bot_token"][:8] + "..." + store["bot_token"][-4:] if len(store["bot_token"]) > 12 else "***"
             bots_list_text += (
-                f"*{idx}. {store['store_name']}*\n"
-                f"• *የስራ ዘርፍ:* `{store.get('industry', 'General').capitalize()}`\n"
-                f"• *ባህሪ:* `{store.get('ui_theme', 'Executive').capitalize()}`\n"
-                f"• *ቶከን ቁልፍ:* `{masked_token}`\n"
-                f"• *ሁኔታ:* በሥራ ላይ እና የተገናኘ ✅\n\n"
+                f"{idx}. {store['store_name']}\n"
+                f"• የስራ ዘርፍ: {store.get('industry', 'General').capitalize()}\n"
+                f"• ባህሪ: {store.get('ui_theme', 'Executive').capitalize()}\n"
+                f"• ቶከን ቁልፍ: {masked_token}\n"
+                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
-        bots_list_text += "🔒 *የደህንነት ማስታወሻ:* ሁሉም የቦት ቶከኖች በጥብቅ የተጠበቁ ናቸው።"
-        await update.message.reply_text(bots_list_text, parse_mode="Markdown")
+        bots_list_text += "🔒 የደህንነት ማስታወሻ: ሁሉም የቦት ቶከኖች በጥብቅ የተጠበቁ ናቸው።"
+        await update.message.reply_text(bots_list_text)
     except Exception as e:
         await update.message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
 
@@ -240,16 +240,16 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     invoice_text = (
-        f"🔒 *ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ*\n"
+        f"🔒 ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *የደረሰኝ ቁጥር:* `{order_id}`\n"
-        f"• *አገልግሎት:* ወርሃዊ ፕሮ ፈቃድ\n"
-        f"• *ትክክለኛ የክፍያ መጠን:* **{exact_amount_etb} ብር**\n"
-        f"• *የክፍያ መንገድ:* `{channel_name}`\n"
-        f"• *የሂሳብ ቁጥር:* `{masked_account}`\n"
+        f"• የደረሰኝ ቁጥር: {order_id}\n"
+        f"• አገልግሎት: ወርሃዊ ፕሮ ፈቃድ\n"
+        f"• ትክክለኛ የክፍያ መጠን: {exact_amount_etb} ብር\n"
+        f"• የክፍያ መንገድ: {channel_name}\n"
+        f"• የሂሳብ ቁጥር: {masked_account}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🚨 *መመሪያ:*\n"
-        f"1. **በዝክጭ `{exact_amount_etb} ብር`** ያስተላልፉ።\n"
+        f"🚨 መመሪያ:\n"
+        f"1. በዝውውር {exact_amount_etb} ብር ያስተላልፉ።\n"
         f"2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) ያንሱ።\n"
         f"3. ወዲያውኑ ለማረጋገጥ ደረሰኙን በዚህ ውይይት ውስጥ ይላኩ።"
     )
@@ -258,7 +258,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
     
-    await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,7 +274,6 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total_revenue = sum(float(tx["amount_etb"]) for tx in rev_res.data)
                 total_subscribers = len(rev_res.data)
                 
-                # Calculate Top Payers
                 payer_totals = {}
                 for tx in rev_res.data:
                     uid = tx["user_id"]
@@ -293,22 +292,22 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     top_payers_text = ""
     for idx, (uid, amt) in enumerate(top_payers, 1):
-        top_payers_text += f"{idx}. መለያ `{uid}` — *{amt:,.2f} ብር*\n"
+        top_payers_text += f"{idx}. መለያ {uid} — {amt:,.2f} ብር\n"
 
     if not top_payers_text:
-        top_payers_text = "እስካሁን የተመዘገበ ከፋይ የለም።"
+        top_payers_text = "እስካሁን የተመዘገበ ከፋይ ለም።"
 
     summary_text = (
-        f"📊 *አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ*\n"
+        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *አጠቃላይ የቦት ጎብኚዎች:* `{total_visitors}` ተጠቃሚዎች\n"
-        f"• *የተረጋገጡ ከፋዮች/አባላት:* `{total_subscribers}` ተጠቃሚዎች\n"
-        f"• *አጠቃላይ የተረጋገጠ ገቢ:* `{total_revenue:,.2f} ብር`\n"
-        f"• *ንቁ የ AI ረዳቶች:* 24/7 በመስመር ላይ ✅\n"
+        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\n"
+        f"• የተረጋገጡ ከፋዮች/አባላት: {total_subscribers} ተጠቃሚዎች\n"
+        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\n"
+        f"• ንቁ የ AI ረዳቶች: 24/7 በመስመር ላይ ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏆 *ከፍተኛ ከፋዮች (Top Payers):*\n{top_payers_text}"
+        f"🏆 ከፍተኛ ከፋዮች (Top Payers):\n{top_payers_text}"
     )
-    await update.message.reply_text(summary_text, parse_mode="Markdown")
+    await update.message.reply_text(summary_text)
 
 
 async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -338,15 +337,15 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 *የሳምንቱ አጠቃላይ ሪፖርት (Weekly Summary)*\n"
+        f"📈 የሳምንቱ አጠቃላይ ሪፖርት (Weekly Summary)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• *በዚህ ሳምንት የጎብኚዎች ቁጥር:* `{weekly_visitors}` አዲስ ተጠቃሚዎች\n"
-        f"• *በዚህ ሳምንት የተመዘገቡ አባላት:* `{weekly_subscribers}` ተጠቃሚዎች\n"
-        f"• *የሳምንቱ አጠቃላይ ገቢ:* `{weekly_revenue:,.2f} ብር`\n"
+        f"• በዚህ ሳምንት የጎብኚዎች ቁጥር: {weekly_visitors} አዲስ ተጠቃሚዎች\n"
+        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
+        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💡 ጠቃሚ ምክር: የንግድዎን ሽያጭ ለማሳደግ ዕቃዎችዎን በ `/update` ማሻሻልዎን አይርሱ!"
+        f"💡 ጠቃሚ ምክር: የንግድዎን ሽያጭ ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
     )
-    await update.message.reply_text(weekly_text, parse_mode="Markdown")
+    await update.message.reply_text(weekly_text)
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -355,11 +354,10 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.message.reply_text(
-            "⚠️ *ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ማሻሻል:*\n\n"
-            " `/update` ብለው በመቀጠል ዝርዝር መረጃዎን ይጻፉ።\n\n"
-            "*ምሳሌ:*\n"
-            "`/update እቃ 1: ጫማ - 2,500 ብር\nእቃ 2: ጃኬት - 3,200 ብር`",
-            parse_mode="Markdown"
+            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ማሻሻል:\n\n"
+            " /update ብለው በመቀጠል ዝርዝር መረጃዎን ይጻፉ።\n\n"
+            "ምሳሌ:\n"
+            "/update እቃ 1: ጫማ - 2,500 ብር\nእቃ 2: ጃኬት - 3,200 ብር"
         )
         return
 
@@ -371,8 +369,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
         if res.data:
             await update.message.reply_text(
-                "✅ *በሁሉም ቦቶችዎ ላይ በቅጽበት ተሻሽሏል!*\n\nየእርስዎ የ AI ረዳቶች አዲሱን ዋጋ እና መረጃ ለደንበኞች ወዲያውኑ ምላሽ እየሰጡበት ነው።",
-                parse_mode="Markdown"
+                "✅ በሁሉም ቦቶችዎ ላይ በቅጽበት ተሻሽሏል!\n\nየእርስዎ የ AI ረዳቶች አዲሱን ዋጋ እና መረጃ ለደንበኞች ወዲያውኑ ምላሽ እየሰጡበት ነው።"
             )
         else:
             await update.message.reply_text("⚠️ ምንም ንቁ መደብር አልተገኘም። እባክዎ መጀመሪያ /register ይጠቀሙ።")
@@ -383,9 +380,9 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🇪🇹 *NEXA AI ቦት ፈጣሪ ረዳት*\n\n"
+        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
         "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እንገናኝ።\n\n"
-        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማነዉ? (ለምሳሌ: *ሀበሻ ፋሽን*)"
+        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማነዉ? (ለምሳሌ: ሀበሻ ፋሽን)"
     )
     return STORE_NAME
 
@@ -404,10 +401,9 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: *{update.message.text}*.\n\n"
+        f"የንግድ ስም ተመዝግቧል: {update.message.text}.\n\n"
         "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        reply_markup=reply_markup
     )
     return INDUSTRY
 
@@ -434,10 +430,9 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"የተመረጠው ዘርፍ: *{chosen_industry.capitalize()}*.\n\n"
+        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
         "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        reply_markup=reply_markup
     )
     return UI_THEME
 
@@ -465,8 +460,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ui_theme"] = chosen_theme
     
     await target_message(
-        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን ወይም የዋጋ ዝርዝርዎን ከታች ይለጥፉ:",
-        parse_mode="Markdown"
+        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን ወይም የዋጋ ዝርዝርዎን ከታች ይለጥፉ:"
     )
     return INVENTORY
 
@@ -475,8 +469,7 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.message.text
     await update.message.reply_text(
         "ሊጠናቀቅ ነው።!\n\n"
-        "ወደ ኦፊሴላዊው የቴሌግራም **@BotFather** ይሂዱ፣ ቦት ይፍጠሩ (`/newbot`)፣ ልዩ **የቦት ቶከን** ይውሰዱ እና እዚህ ይለጥፉ:",
-        parse_mode="Markdown"
+        "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
 
@@ -511,13 +504,13 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
 
     success_msg = (
-        f"🎉 *እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል!* 🇪🇹🚀\n\n"
-        f"• *የንግድ ስም:* {store_name}\n"
-        f"• *ዘርፍ:* {industry.capitalize()}\n"
-        f"• *ሁኔታ:* ተገናኝቷል እና ንቁ ነው ✅\n\n"
+        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
+        f"• የንግድ ስም: {store_name}\n"
+        f"• ዘርፍ: {industry.capitalize()}\n"
+        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
         "ቦትዎ አሁን ሙሉ በሙሉ አገልግሎት ለመስጠት ዝግጁ ነው።"
     )
-    await update.message.reply_text(success_msg, parse_mode="Markdown")
+    await update.message.reply_text(success_msg)
     return ConversationHandler.END
 
 
@@ -594,8 +587,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
             if existing_tx.data:
                 await update.message.reply_text(
-                    f"🚫 *የደህንነት ማስጠንቀቂያ: ደረሰኝ ተደጋግሞ ጥቅም ላይ ውሏል!*\n\nየግብይት መለያ `{ref_id}` ከዚህ በፊት ጥቅም ላይ ውሏል።",
-                    parse_mode="Markdown"
+                    f"🚫 የደህንነት ማስጠንቀቂያ: ደረሰኝ ተደጋግሞ ጥቅም ላይ ውሏል!\n\nየግብይት መለያ {ref_id} ከዚህ በፊት ጥቅም ላይ ውሏል።"
                 )
                 return
         except Exception:
@@ -637,15 +629,13 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         })
 
         await update.message.reply_text(
-            f"✅ *ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል!* ⭐🇪🇹\n\n"
-            f"• *የግብይት መለያ:* `{ref_id}`\n"
-            f"• *ሁኔታ:* ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!",
-            parse_mode="Markdown"
+            f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n\n"
+            f"• የግብይት መለያ: {ref_id}\n"
+            f"• ሁኔታ: ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!"
         )
     else:
         await update.message.reply_text(
-            f"📥 *ደረሰኙ ለግምገማ ተመዝግቧል*\n\nበራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው ታይቶለታል።",
-            parse_mode="Markdown"
+            f"📥 ደረሰኙ ለግምገማ ተመዝግቧል\n\nበራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው ታይቶለታል።"
         )
 
 
@@ -657,7 +647,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text or user_text.startswith("/"):
         return
 
-    # Use Groq AI to understand user intent naturally
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
         "Classify intent into one of these categories: "
@@ -856,14 +845,12 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         async with httpx.AsyncClient() as client:
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": f"🇪🇹 እንኳን ወደ *{store.get('store_name')}* በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
-                "reply_markup": reply_markup,
-                "parse_mode": "Markdown"
+                "text": f"🇪🇹 እንኳን ወደ {store.get('store_name')} በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
+                "reply_markup": reply_markup
             })
             await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": "🛡️ *የደህንነት ማስታወሻ*: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።",
-                "parse_mode": "Markdown"
+                "text": "🛡️ የደህንነት ማስታወሻ: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።"
             })
         return {"ok": True}
 
@@ -967,7 +954,7 @@ async def store_chat_webhook(payload: dict):
 
     async with httpx.AsyncClient() as client:
         await client.post(
-            f"https://api.telegram.text/bot{bot_token}/sendMessage" if False else f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": ai_reply, "parse_mode": "Markdown"}
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": ai_reply}
         )
     return {"ok": True}
