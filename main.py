@@ -17,7 +17,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from groq import Groq
+from groq import AsyncGroq
 from supabase import create_client, Client
 
 # Configure logging
@@ -43,15 +43,16 @@ AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "Awash Corporate Accoun
 
 # Initialize Clients with Fail-Safe Checks
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Master Telegram Bot Application (Optimized for Webhook-only processing)
+# Master Telegram Bot Application
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
+
+# Global HTTP Client Pool for High Throughput
+http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
 STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
-pending_orders = {}
-transaction_history = [] 
 
 
 # -------------------------------------------------------------------
@@ -66,11 +67,13 @@ async def root_health_check():
 # -------------------------------------------------------------------
 # Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
 # -------------------------------------------------------------------
-def get_or_create_user_subscription(user_id: int) -> dict:
+async def get_or_create_user_subscription(user_id: int) -> dict:
     now = datetime.now()
     if supabase:
         try:
-            res = supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
+            res = await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
+            )
             if res.data:
                 sub = res.data[0]
                 return {
@@ -89,20 +92,22 @@ def get_or_create_user_subscription(user_id: int) -> dict:
     
     if supabase:
         try:
-            supabase.table("subscriptions").upsert({
-                "user_id": str(user_id),
-                "trial_expires": default_sub["trial_expires"].isoformat(),
-                "credits_remaining": 50,
-                "is_pro": False
-            }).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").upsert({
+                    "user_id": str(user_id),
+                    "trial_expires": default_sub["trial_expires"].isoformat(),
+                    "credits_remaining": 50,
+                    "is_pro": False
+                }).execute()
+            )
         except Exception as e:
             logger.error(f"Subscription upsert error: {e}")
             
     return default_sub
 
 
-def verify_active_access(user_id: int) -> bool:
-    sub = get_or_create_user_subscription(user_id)
+async def verify_active_access(user_id: int) -> bool:
+    sub = await get_or_create_user_subscription(user_id)
     if sub["is_pro"]:
         return True
     if datetime.now() < sub["trial_expires"] and sub["credits_remaining"] > 0:
@@ -110,24 +115,28 @@ def verify_active_access(user_id: int) -> bool:
     return False
 
 
-def deduct_credit(user_id: int):
-    sub = get_or_create_user_subscription(user_id)
+async def deduct_credit(user_id: int):
+    sub = await get_or_create_user_subscription(user_id)
     if not sub["is_pro"]:
         new_credits = max(0, sub["credits_remaining"] - 1)
         if supabase:
             try:
-                supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
+                )
             except Exception as e:
                 logger.error(f"Credit deduction error: {e}")
 
 
-def log_visitor(user_id: int):
+async def log_visitor(user_id: int):
     if supabase:
         try:
-            supabase.table("store_visitors").upsert({
-                "user_id": str(user_id),
-                "last_visit": datetime.now().isoformat()
-            }, on_conflict="user_id").execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("store_visitors").upsert({
+                    "user_id": str(user_id),
+                    "last_visit": datetime.now().isoformat()
+                }, on_conflict="user_id").execute()
+            )
         except Exception as e:
             logger.error(f"Visitor logging error: {e}")
 
@@ -135,15 +144,24 @@ def log_visitor(user_id: int):
 # -------------------------------------------------------------------
 # Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
 # -------------------------------------------------------------------
-def select_optimal_payout_destination() -> tuple[str, str, int, str]:
+async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(hours=24)
     
-    telebirr_24h_total = sum(
-        tx.get("amount_etb", 0) for tx in transaction_history 
-        if tx.get("destination") == "TELEBIRR" and tx.get("timestamp", now) > twenty_four_hours_ago
-    )
-    
+    telebirr_24h_total = 0.0
+    if supabase:
+        try:
+            rev_res = await asyncio.to_thread(
+                lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+            )
+            if rev_res.data:
+                for tx in rev_res.data:
+                    tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
+                    if tx_date >= twenty_four_hours_ago:
+                        telebirr_24h_total += float(tx["amount_etb"])
+        except Exception as e:
+            logger.error(f"Telebirr 24h cap check error: {e}")
+
     SAFE_TELEBIRR_CAP = 20000.0 
     whole_birr_amount = random.randint(3500, 3600)
     
@@ -154,12 +172,15 @@ def select_optimal_payout_destination() -> tuple[str, str, int, str]:
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Functions
+# Telegram Master Bot Handlers & Commands
 # -------------------------------------------------------------------
-async def send_master_start(chat_id: int, user_first_name: str):
-    log_visitor(chat_id)
-    sub_data = get_or_create_user_subscription(chat_id)
-    has_access = verify_active_access(chat_id)
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    await log_visitor(user_id)
+    
+    sub_data = await get_or_create_user_subscription(user_id)
+    has_access = await verify_active_access(user_id)
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
@@ -174,7 +195,7 @@ async def send_master_start(chat_id: int, user_first_name: str):
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user_first_name}!\n\n"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
         f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ 'ቦቶቼን አሳየኝ' ወይም 'ገቢዬን ማየት እፈልጋለሁ')\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
@@ -191,24 +212,21 @@ async def send_master_start(chat_id: int, user_first_name: str):
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
-    
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": welcome_text, "reply_markup": {"inline_keyboard": keyboard}}
-        )
+    await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
     if not supabase:
-        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
-        res = supabase.table("stores").select("store_name", "industry", "ui_theme", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("store_name", "industry", "ui_theme", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
+        )
         if not res.data:
-            await update.message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
+            await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
         bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -223,24 +241,33 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
         bots_list_text += "🔒 የደህንነት ማስታወሻ: ሁሉም የቦት ቶከኖች በጥብቅ የተጠበቁ ናቸው።"
-        await update.message.reply_text(bots_list_text)
+        await update.effective_message.reply_text(bots_list_text)
     except Exception as e:
-        await update.message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
+        await update.effective_message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
 
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    channel_name, masked_account, exact_amount_etb, channel_code = select_optimal_payout_destination()
+    channel_name, masked_account, exact_amount_etb, channel_code = await select_optimal_payout_destination()
     order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
     
-    pending_orders[user_id] = {
+    order_data = {
+        "user_id": str(user_id),
         "order_id": order_id,
         "amount": str(exact_amount_etb),
         "channel": channel_name,
         "destination_code": channel_code,
         "status": "pending_payment"
     }
+
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("pending_orders").upsert(order_data, on_conflict="user_id").execute()
+            )
+        except Exception as e:
+            logger.error(f"Pending order save error: {e}")
     
     invoice_text = (
         f"🔒 ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ\n"
@@ -261,7 +288,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
     
-    await update.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,7 +299,9 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
-            rev_res = supabase.table("paid_subscriptions").select("user_id", "amount_etb", "created_at").execute()
+            rev_res = await asyncio.to_thread(
+                lambda: supabase.table("paid_subscriptions").select("user_id", "amount_etb", "created_at").execute()
+            )
             if rev_res.data:
                 total_revenue = sum(float(tx["amount_etb"]) for tx in rev_res.data)
                 total_subscribers = len(rev_res.data)
@@ -285,7 +314,9 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sorted_payers = sorted(payer_totals.items(), key=lambda x: x[1], reverse=True)[:5]
                 top_payers = sorted_payers
 
-            vis_res = supabase.table("store_visitors").select("user_id", count="exact").execute()
+            vis_res = await asyncio.to_thread(
+                lambda: supabase.table("store_visitors").select("user_id", count="exact").execute()
+            )
             if vis_res.count is not None:
                 total_visitors = vis_res.count
             elif vis_res.data:
@@ -310,7 +341,7 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🏆 ከፍተኛ ከፋዮች (Top Payers):\n{top_payers_text}"
     )
-    await update.message.reply_text(summary_text)
+    await update.effective_message.reply_text(summary_text)
 
 
 async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,7 +353,9 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
 
     if supabase:
         try:
-            rev_res = supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+            rev_res = await asyncio.to_thread(
+                lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+            )
             if rev_res.data:
                 for tx in rev_res.data:
                     tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
@@ -330,7 +363,9 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
                         weekly_revenue += float(tx["amount_etb"])
                         weekly_subscribers += 1
 
-            vis_res = supabase.table("store_visitors").select("last_visit").execute()
+            vis_res = await asyncio.to_thread(
+                lambda: supabase.table("store_visitors").select("last_visit").execute()
+            )
             if vis_res.data:
                 for vis in vis_res.data:
                     vis_date = datetime.fromisoformat(vis["last_visit"].replace("Z", "+00:00").split("+")[0])
@@ -348,15 +383,15 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"💡 ጠቃሚ ምክር: የንግድዎን ሽያጭ ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
     )
-    await update.message.reply_text(weekly_text)
+    await update.effective_message.reply_text(weekly_text)
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    owner_id = str(update.message.from_user.id)
+    owner_id = str(update.effective_user.id)
     new_inventory = " ".join(context.args).strip()
 
     if not new_inventory:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ ዕቃዎችን ወይም አገልግሎቶችን በቀጥታ ማሻሻል:\n\n"
             " /update ብለው በመቀጠል ዝርዝር መረጃዎን ይጻፉ።\n\n"
             "ምሳሌ:\n"
@@ -365,46 +400,48 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not supabase:
-        await update.message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
         return
 
     try:
-        res = supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"inventory_data": new_inventory}).eq("owner_telegram_id", owner_id).execute()
+        )
         if res.data:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "✅ በሁሉም ቦቶችዎ ላይ በቅጽበት ተሻሽሏል!\n\nየእርስዎ የ AI ረዳቶች አዲሱን ዋጋ እና መረጃ ለደንበኞች ወዲያውኑ ምላሽ እየሰጡበት ነው።"
             )
         else:
-            await update.message.reply_text("⚠️ ምንም ንቁ መደብር አልተገኘም። እባክዎ መጀመሪያ /register ይጠቀሙ።")
+            await update.effective_message.reply_text("⚠️ ምንም ንቁ መደብር አልተገኘም። እባክዎ መጀመሪያ /register ይጠቀሙ።")
     except Exception as e:
-        await update.message.reply_text(f"ማሻሻል አልተሳካም: {str(e)}")
+        await update.effective_message.reply_text(f"ማሻሻል አልተሳካም: {str(e)}")
 
 
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
         "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እንገናኝ።\n\n"
-        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማነዉ? (ለምሳሌ: ሀበሻ ፋሽን)"
+        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: ሀበሻ ፋሽን)"
     )
     return STORE_NAME
 
 
 async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["store_name"] = update.message.text
+    context.user_data["store_name"] = update.effective_message.text
     
     keyboard = [
         [InlineKeyboardButton("🛍️ ቸርቻሪ እና እቃዎች", callback_data="ind_retail")],
         [InlineKeyboardButton("🏋️ ጤና እና የአካል ብቃት", callback_data="ind_fitness")],
         [InlineKeyboardButton("🏠 የቤት እና ንብረት ሽያጭ", callback_data="ind_realestate")],
         [InlineKeyboardButton("🩺 ህክምና እና ክሊኒክ", callback_data="ind_clinic")],
-        [InlineKeyboardButton("🤝 ኤጀንሲ እናደላላ", callback_data="ind_broker")],
+        [InlineKeyboardButton("🤝 ኤጀንሲ እና ደላላ", callback_data="ind_broker")],
         [InlineKeyboardButton("⚙️ አጠቃላይ አገልግሎቶች", callback_data="ind_general")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: {update.message.text}.\n\n"
+    await update.effective_message.reply_text(
+        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
         "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
         reply_markup=reply_markup
     )
@@ -419,8 +456,8 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chosen_industry = query.data.replace("ind_", "")
         target_message = query.edit_message_text
     else:
-        chosen_industry = update.message.text.lower()
-        target_message = update.message.reply_text
+        chosen_industry = update.effective_message.text.lower()
+        target_message = update.effective_message.reply_text
 
     context.user_data["industry"] = chosen_industry
 
@@ -449,7 +486,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chosen_theme = query.data.replace("theme_", "")
         target_message = query.edit_message_text
     else:
-        text = update.message.text.lower()
+        text = update.effective_message.text.lower()
         if "sales" in text:
             chosen_theme = "sales"
         elif "friendly" in text:
@@ -458,7 +495,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chosen_theme = "minimalist"
         else:
             chosen_theme = "executive"
-        target_message = update.message.reply_text
+        target_message = update.effective_message.reply_text
 
     context.user_data["ui_theme"] = chosen_theme
     
@@ -469,8 +506,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["inventory_data"] = update.message.text
-    await update.message.reply_text(
+    context.user_data["inventory_data"] = update.effective_message.text
+    await update.effective_message.reply_text(
         "ሊጠናቀቅ ነው።!\n\n"
         "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
@@ -478,8 +515,8 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_token = update.message.text.strip()
-    owner_telegram_id = str(update.message.from_user.id)
+    bot_token = update.effective_message.text.strip()
+    owner_telegram_id = str(update.effective_user.id)
     
     store_name = context.user_data.get("store_name", "My Store")
     industry = context.user_data.get("industry", "general")
@@ -487,24 +524,35 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
-    async with httpx.AsyncClient() as client:
-        await client.post(
+    
+    try:
+        resp = await http_client.post(
             f"https://api.telegram.org/bot{bot_token}/setWebhook", 
             json={"url": tenant_webhook_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
         )
+        res_json = resp.json()
+        if not res_json.get("ok"):
+            await update.effective_message.reply_text("⚠️ ያስገቡት የቦት ቶከን ልክ አይደለም ወይም Telegram ሊቀበለው አልቻለም። እባክዎ ትክክለኛ ቶከን እንደገና ይላኩ:")
+            return BOT_TOKEN
+    except Exception as e:
+        logger.error(f"SetWebhook validation error: {e}")
+        await update.effective_message.reply_text("⚠️ ቶከኑን ማረጋገጥ አልተቻለም። እባክዎ ትክክለኛ ቶከን ያስገቡ:")
+        return BOT_TOKEN
 
     if supabase:
         try:
-            supabase.table("stores").upsert({
-                "bot_token": bot_token,
-                "owner_telegram_id": owner_telegram_id,
-                "store_name": store_name,
-                "industry": industry,
-                "ui_theme": ui_theme,
-                "inventory_data": inventory_data
-            }, on_conflict="bot_token").execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("stores").upsert({
+                    "bot_token": bot_token,
+                    "owner_telegram_id": owner_telegram_id,
+                    "store_name": store_name,
+                    "industry": industry,
+                    "ui_theme": ui_theme,
+                    "inventory_data": inventory_data
+                }, on_conflict="bot_token").execute()
+            )
         except Exception as e:
-            await update.message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
+            await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
 
     success_msg = (
         f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
@@ -513,12 +561,12 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
         "ቦትዎ አሁን ሙሉ በሙሉ አገልግሎት ለመስጠት ዝግጁ ነው።"
     )
-    await update.message.reply_text(success_msg)
+    await update.effective_message.reply_text(success_msg)
     return ConversationHandler.END
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ ምዝገባው ተሰርዟል። ዝግጁ ሲሆኑ /register የሚለውን ይጠቀሙ።")
+    await update.effective_message.reply_text("❌ ምዝገባው ተሰርዟል። ዝግጁ ሲሆኑ /register የሚለውን ይጠቀሙ።")
     return ConversationHandler.END
 
 
@@ -543,10 +591,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    order = pending_orders.get(user_id)
+    order = None
+    
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("pending_orders").select("*").eq("user_id", str(user_id)).execute()
+            )
+            if res.data:
+                order = res.data[0]
+        except Exception as e:
+            logger.error(f"Fetch pending order error: {e}")
     
     if not order:
-        await update.message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ይጠቀሙ።")
+        await update.effective_message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ይጠቀሙ።")
         return
 
     photo_file = await update.message.photo[-1].get_file()
@@ -558,7 +616,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None}
 
-    if groq_client:
+    if async_groq_client:
         try:
             prompt = (
                 f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
@@ -567,8 +625,8 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
-            response = groq_client.chat.completions.create(
-                model="llama-3.2-11b-vision-instruct",
+            response = await async_groq_client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -587,9 +645,11 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if ref_id and supabase:
         try:
-            existing_tx = supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
+            existing_tx = await asyncio.to_thread(
+                lambda: supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
+            )
             if existing_tx.data:
-                await update.message.reply_text(
+                await update.effective_message.reply_text(
                     f"🚫 የደህንነት ማስጠንቀቂያ: ደረሰኝ ተደጋግሞ ጥቅም ላይ ውሏል!\n\nየግብይት መለያ {ref_id} ከዚህ በፊት ጥቅም ላይ ውሏል።"
                 )
                 return
@@ -601,43 +661,47 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if parsed_result.get("valid") and amount_matches and ref_id:
         if supabase:
             try:
-                supabase.table("processed_receipts").insert({
-                    "user_id": str(user_id),
-                    "order_id": order["order_id"],
-                    "reference_id": ref_id,
-                    "amount": expected_amount,
-                    "channel": expected_channel,
-                    "created_at": datetime.now().isoformat()
-                }).execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("processed_receipts").insert({
+                        "user_id": str(user_id),
+                        "order_id": order["order_id"],
+                        "reference_id": ref_id,
+                        "amount": expected_amount,
+                        "channel": expected_channel,
+                        "created_at": datetime.now().isoformat()
+                    }).execute()
+                )
 
-                supabase.table("paid_subscriptions").insert({
-                    "user_id": str(user_id),
-                    "order_id": order["order_id"],
-                    "amount_etb": float(expected_amount),
-                    "reference_id": ref_id
-                }).execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("paid_subscriptions").insert({
+                        "user_id": str(user_id),
+                        "order_id": order["order_id"],
+                        "amount_etb": float(expected_amount),
+                        "reference_id": ref_id
+                    }).execute()
+                )
 
-                supabase.table("subscriptions").upsert({
-                    "user_id": str(user_id),
-                    "is_pro": True,
-                    "credits_remaining": 999999
-                }).execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("subscriptions").upsert({
+                        "user_id": str(user_id),
+                        "is_pro": True,
+                        "credits_remaining": 999999
+                    }).execute()
+                )
+
+                await asyncio.to_thread(
+                    lambda: supabase.table("pending_orders").delete().eq("user_id", str(user_id)).execute()
+                )
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
-        transaction_history.append({
-            "amount_etb": float(expected_amount),
-            "destination": order.get("destination_code", "TELEBIRR"),
-            "timestamp": datetime.now()
-        })
-
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n\n"
             f"• የግብይት መለያ: {ref_id}\n"
             f"• ሁኔታ: ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!"
         )
     else:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"📥 ደረሰኙ ለግምገማ ተመዝግቧል\n\nበራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው ታይቶለታል።"
         )
 
@@ -661,6 +725,7 @@ conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
 
+telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
@@ -671,9 +736,64 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
-# --- FastAPI Webhook Lifecycle & Unified Master Routing ---
+# --- Master Natural Language Fallback Handler (Placed last to protect ConversationHandler) ---
+async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.effective_message.text
+    if not user_text or user_text.startswith("/"):
+        return
+
+    system_prompt = (
+        "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
+        "Classify intent into one of these categories: "
+        "1. 'mybots' (if they want to see their bots) "
+        "2. 'summary' (if they want revenue, stats, or summary) "
+        "3. 'weekly' (if they want weekly reports) "
+        "4. 'register' (if they want to create a bot) "
+        "5. 'upgrade' (if they want to pay or upgrade to pro) "
+        "6. 'general' (if it's a general question, greeting, or inquiring how you can help) "
+        "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic or English depending on user language\"}"
+    )
+
+    intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ? (Hello! What can I do for you today?)"}
+    if async_groq_client:
+        try:
+            response = await async_groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
+                temperature=0.3,
+                max_tokens=300
+            )
+            intent_result = json.loads(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Master AI Intent Error: {e}")
+
+    intent = intent_result.get("intent")
+    if intent == "mybots":
+        await my_bots_command(update, context)
+    elif intent == "summary":
+        await summary_command(update, context)
+    elif intent == "weekly":
+        await weekly_summary_command(update, context)
+    elif intent == "register":
+        await update.effective_message.reply_text("አዲስ ቦት ለመፍጠር እባክዎ /register የሚለውን ይጠቀሙ።")
+    elif intent == "upgrade":
+        await upgrade_command(update, context)
+    else:
+        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?"))
+
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
+
+
+# --- FastAPI Webhook Lifecycle & Tenant Routing ---
 @app.on_event("startup")
 async def startup_event():
+    global http_client
+    http_client = httpx.AsyncClient(timeout=10.0)
+
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     await telegram_app.initialize()
     await telegram_app.start() 
@@ -681,20 +801,21 @@ async def startup_event():
 
     if supabase:
         try:
-            stores_res = supabase.table("stores").select("bot_token").execute()
+            stores_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token").execute()
+            )
             if stores_res.data:
-                async with httpx.AsyncClient() as client:
-                    tasks = []
-                    for store in stores_res.data:
-                        t_token = store.get("bot_token")
-                        if t_token:
-                            t_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{t_token}"
-                            tasks.append(client.post(
-                                f"https://api.telegram.org/bot{t_token}/setWebhook", 
-                                json={"url": t_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
-                            ))
-                    if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                tasks = []
+                for store in stores_res.data:
+                    t_token = store.get("bot_token")
+                    if t_token:
+                        t_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{t_token}"
+                        tasks.append(http_client.post(
+                            f"https://api.telegram.org/bot{t_token}/setWebhook", 
+                            json={"url": t_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
+                        ))
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as e:
             logger.error(f"Startup webhook sync error: {e}")
 
@@ -702,6 +823,8 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await telegram_app.stop()
+    if http_client:
+        await http_client.aclose()
 
 
 @app.post("/webhook")
@@ -711,64 +834,6 @@ async def telegram_webhook(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid secret token")
 
     data = await request.json()
-    
-    # Direct handling of master bot updates to ensure /start and text queries never fail
-    if "message" in data:
-        msg = data["message"]
-        chat_id = msg["chat"]["id"]
-        user_text = msg.get("text", "")
-        user_first_name = msg.get("from", {}).get("first_name", "User")
-        
-        if user_text == "/start":
-            await send_master_start(chat_id, user_first_name)
-            return {"status": "ok"}
-            
-        elif user_text and not user_text.startswith("/"):
-            # Master AI Intent Router
-            system_prompt = (
-                "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
-                "Classify intent into one of these categories: "
-                "1. 'mybots' (if they want to see their bots) "
-                "2. 'summary' (if they want revenue, stats, or summary) "
-                "3. 'weekly' (if they want weekly reports) "
-                "4. 'register' (if they want to create a bot) "
-                "5. 'upgrade' (if they want to pay or upgrade to pro) "
-                "6. 'general' (if it's a general question, greeting, or inquiring how you can help) "
-                "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic or English depending on user language\"}"
-            )
-            
-            intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ? (Hello! What can I do for you today?)"}
-            if groq_client:
-                try:
-                    response = groq_client.chat.completions.create(
-                        model="llama3-70b-8192",
-                        response_format={"type": "json_object"},
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_text}
-                        ],
-                        temperature=0.3,
-                        max_tokens=300
-                    )
-                    intent_result = json.loads(response.choices[0].message.content)
-                except Exception as e:
-                    logger.error(f"Master AI Intent Error: {e}")
-            
-            intent = intent_result.get("intent")
-            async with httpx.AsyncClient() as client:
-                if intent == "register":
-                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
-                        "chat_id": chat_id, 
-                        "text": "አዲስ ቦት ለመፍጠር እባክዎ /register የሚለውን ትዕዛዝ ይጠቀሙ።"
-                    })
-                else:
-                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
-                        "chat_id": chat_id, 
-                        "text": intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?")
-                    })
-            return {"status": "ok"}
-
-    # Fallback to python-telegram-bot application processor for conversations, commands, and buttons
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
@@ -792,10 +857,12 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             
             if supabase:
                 try:
-                    supabase.table("customer_languages").upsert({
-                        "chat_id": str(chat_id),
-                        "language": lang
-                    }, on_conflict="chat_id").execute()
+                    await asyncio.to_thread(
+                        lambda: supabase.table("customer_languages").upsert({
+                            "chat_id": str(chat_id),
+                            "language": lang
+                        }, on_conflict="chat_id").execute()
+                    )
                 except Exception:
                     pass
 
@@ -806,9 +873,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             }
             greeting = lang_greetings.get(lang, "ሰላም! እንዴት ልረዳዎ እንችላለን?")
 
-            async with httpx.AsyncClient() as client:
-                await client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
-                await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={"chat_id": chat_id, "text": greeting})
+            await http_client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
+            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={"chat_id": chat_id, "text": greeting})
             return {"ok": True}
 
     message = data.get("message", {})
@@ -823,25 +889,28 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
 
     store = None
     if supabase:
-        res = supabase.table("stores").select("*").eq("bot_token", bot_token).execute()
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("*").eq("bot_token", bot_token).execute()
+        )
         if res.data:
             store = res.data[0]
 
     if not store:
-        async with httpx.AsyncClient() as client:
-            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                "chat_id": chat_id, 
-                "text": "መደብሩ አልተገኘም (Store configuration not found)."
-            })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id, 
+            "text": "መደብሩ አልተገኘም (Store configuration not found)."
+        })
         return {"ok": True}
 
     if user_text == "/start":
         if supabase:
             try:
-                supabase.table("customer_languages").upsert({
-                    "chat_id": str(chat_id),
-                    "language": "amharic"
-                }, on_conflict="chat_id").execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("customer_languages").upsert({
+                        "chat_id": str(chat_id),
+                        "language": "amharic"
+                    }, on_conflict="chat_id").execute()
+                )
             except Exception:
                 pass
 
@@ -851,16 +920,15 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             [InlineKeyboardButton("🇪🇹 Afaan Oromo", callback_data="lang_oromo")]
         ]
         reply_markup = {"inline_keyboard": keyboard}
-        async with httpx.AsyncClient() as client:
-            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": f"🇪🇹 እንኳን ወደ {store.get('store_name')} በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
-                "reply_markup": reply_markup
-            })
-            await client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": "🛡️ የደህንነት ማስታወሻ: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።"
-            })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": f"🇪🇹 እንኳን ወደ {store.get('store_name')} በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
+            "reply_markup": reply_markup
+        })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": "🛡️ የደህንነት ማስታወሻ: የእርስዎ ውይይት በNexa AI የንግድ ጥበቃ ስርዓት የተመሰጠረ እና ደህንነቱ የተጠበቀ ነው።"
+        })
         return {"ok": True}
 
     if not user_text:
@@ -869,9 +937,22 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     customer_lang = "amharic"
     if supabase:
         try:
-            lang_res = supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).execute()
+            lang_res = await asyncio.to_thread(
+                lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).execute()
+            )
             if lang_res.data:
                 customer_lang = lang_res.data[0]["language"]
+        except Exception:
+            pass
+
+    history_messages = []
+    if supabase:
+        try:
+            hist_res = await asyncio.to_thread(
+                lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).order("created_at", desc=True).limit(6).execute()
+            )
+            if hist_res.data:
+                history_messages = list(reversed(hist_res.data))
         except Exception:
             pass
 
@@ -887,7 +968,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "username": username,
         "first_name": first_name,
         "customer_lang": customer_lang,
-        "history_messages": []
+        "history_messages": history_messages
     }
     
     return await store_chat_webhook(payload)
@@ -908,15 +989,19 @@ async def store_chat_webhook(payload: dict):
 
     if owner_telegram_id:
         owner_id_int = int(owner_telegram_id)
-        get_or_create_user_subscription(owner_id_int)
-        if not verify_active_access(owner_id_int):
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። ባለቤቱ ፓኬጁን ማደስ አለበት።"}
-                )
+        await get_or_create_user_subscription(owner_id_int)
+        if not await verify_active_access(owner_id_int):
+            await http_client.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። ባለቤቱ ፓኬጁን ማደስ አለበት።"}
+            )
             return {"ok": True}
-        deduct_credit(owner_id_int)
+        await deduct_credit(owner_id_int)
+
+    await http_client.post(
+        f"https://api.telegram.org/bot{bot_token}/sendChatAction",
+        json={"chat_id": chat_id, "action": "typing"}
+    )
 
     lang_instructions = {
         "amharic": "በአማርኛ ቋንቋ ብቻ መልስ ስጥ. Be polite, professional, and helpful.",
@@ -943,15 +1028,15 @@ async def store_chat_webhook(payload: dict):
     """
 
     ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
-    if groq_client:
+    if async_groq_client:
         try:
             messages = [{"role": "system", "content": system_prompt}]
             for hm in history_messages:
                 messages.append({"role": hm.get("role", "user"), "content": hm.get("content", "")})
             messages.append({"role": "user", "content": user_text})
 
-            completion = groq_client.chat.completions.create(
-                model="llama3-70b-8192",
+            completion = await async_groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
                 messages=messages,
                 temperature=0.7,
                 max_tokens=600
@@ -959,11 +1044,21 @@ async def store_chat_webhook(payload: dict):
             ai_reply = completion.choices[0].message.content
         except Exception as e:
             logger.error(f"Groq Chat Error: {e}")
-            ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል። እባክዎ ትንሽቆይተው እንደገና ይሞክሩ።"
+            ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል። እባክዎ ትንሽ ቆይተው እንደገና ይሞክሩ።"
 
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": ai_reply}
-        )
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("chat_history").insert([
+                    {"chat_id": str(chat_id), "role": "user", "content": user_text, "created_at": datetime.now().isoformat()},
+                    {"chat_id": str(chat_id), "role": "assistant", "content": ai_reply, "created_at": datetime.now().isoformat()}
+                ]).execute()
+            )
+        except Exception:
+            pass
+
+    await http_client.post(
+        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+        json={"chat_id": chat_id, "text": ai_reply}
+    )
     return {"ok": True}
