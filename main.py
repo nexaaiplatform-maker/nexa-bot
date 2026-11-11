@@ -45,7 +45,7 @@ AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "Awash Corporate Accoun
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Master Telegram Bot Application
+# Master Telegram Bot Application (Optimized for Webhook-only processing)
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
 
 # Onboarding Conversation States
@@ -154,15 +154,12 @@ def select_optimal_payout_destination() -> tuple[str, str, int, str]:
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands (AI-Powered Dashboard)
+# Telegram Master Bot Functions
 # -------------------------------------------------------------------
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    log_visitor(user_id)
-    
-    sub_data = get_or_create_user_subscription(user_id)
-    has_access = verify_active_access(user_id)
+async def send_master_start(chat_id: int, user_first_name: str):
+    log_visitor(chat_id)
+    sub_data = get_or_create_user_subscription(chat_id)
+    has_access = verify_active_access(chat_id)
     expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
@@ -177,7 +174,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user_first_name}!\n\n"
         f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ 'ቦቶቼን አሳየኝ' ወይም 'ገቢዬን ማየት እፈልጋለሁ')\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
@@ -194,7 +191,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
-    await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": welcome_text, "reply_markup": {"inline_keyboard": keyboard}}
+        )
 
 
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -640,58 +642,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-# --- AI-Powered Master Bot Natural Language Router with Elite Prompt Handling ---
-async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    user_id = update.effective_user.id
-    
-    if not user_text or user_text.startswith("/"):
-        return
-
-    system_prompt = (
-        "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
-        "Classify intent into one of these categories: "
-        "1. 'mybots' (if they want to see their bots) "
-        "2. 'summary' (if they want revenue, stats, or summary) "
-        "3. 'weekly' (if they want weekly reports) "
-        "4. 'register' (if they want to create a bot) "
-        "5. 'upgrade' (if they want to pay or upgrade to pro) "
-        "6. 'general' (if it's a general question, greeting, or inquiring how you can help) "
-        "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic or English depending on user language\"}"
-    )
-
-    intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ? (Hello! What can I do for you today?)"}
-    if groq_client:
-        try:
-            response = groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text}
-                ],
-                temperature=0.3,
-                max_tokens=300
-            )
-            intent_result = json.loads(response.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"Master AI Intent Error: {e}")
-
-    intent = intent_result.get("intent")
-    if intent == "mybots":
-        await my_bots_command(update, context)
-    elif intent == "summary":
-        await summary_command(update, context)
-    elif intent == "weekly":
-        await weekly_summary_command(update, context)
-    elif intent == "register":
-        await update.message.reply_text("አዲስ ቦት ለመፍጠር እባክዎ /register የሚለውን ይጠቀሙ።")
-    elif intent == "upgrade":
-        await upgrade_command(update, context)
-    else:
-        await update.message.reply_text(intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?"))
-
-
 # --- Handlers Registration ---
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("register", register_start)],
@@ -711,7 +661,6 @@ conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
 
-telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
@@ -720,10 +669,9 @@ telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
 telegram_app.add_handler(conv_handler)
 telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
 
 
-# --- FastAPI Webhook Lifecycle & Tenant Routing ---
+# --- FastAPI Webhook Lifecycle & Unified Master Routing ---
 @app.on_event("startup")
 async def startup_event():
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
@@ -763,6 +711,64 @@ async def telegram_webhook(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid secret token")
 
     data = await request.json()
+    
+    # Direct handling of master bot updates to ensure /start and text queries never fail
+    if "message" in data:
+        msg = data["message"]
+        chat_id = msg["chat"]["id"]
+        user_text = msg.get("text", "")
+        user_first_name = msg.get("from", {}).get("first_name", "User")
+        
+        if user_text == "/start":
+            await send_master_start(chat_id, user_first_name)
+            return {"status": "ok"}
+            
+        elif user_text and not user_text.startswith("/"):
+            # Master AI Intent Router
+            system_prompt = (
+                "You are Nexa AI Master Assistant. Analyze user intent from their Amharic or English message. "
+                "Classify intent into one of these categories: "
+                "1. 'mybots' (if they want to see their bots) "
+                "2. 'summary' (if they want revenue, stats, or summary) "
+                "3. 'weekly' (if they want weekly reports) "
+                "4. 'register' (if they want to create a bot) "
+                "5. 'upgrade' (if they want to pay or upgrade to pro) "
+                "6. 'general' (if it's a general question, greeting, or inquiring how you can help) "
+                "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic or English depending on user language\"}"
+            )
+            
+            intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ? (Hello! What can I do for you today?)"}
+            if groq_client:
+                try:
+                    response = groq_client.chat.completions.create(
+                        model="llama3-70b-8192",
+                        response_format={"type": "json_object"},
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_text}
+                        ],
+                        temperature=0.3,
+                        max_tokens=300
+                    )
+                    intent_result = json.loads(response.choices[0].message.content)
+                except Exception as e:
+                    logger.error(f"Master AI Intent Error: {e}")
+            
+            intent = intent_result.get("intent")
+            async with httpx.AsyncClient() as client:
+                if intent == "register":
+                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                        "chat_id": chat_id, 
+                        "text": "አዲስ ቦት ለመፍጠር እባክዎ /register የሚለውን ትዕዛዝ ይጠቀሙ።"
+                    })
+                else:
+                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                        "chat_id": chat_id, 
+                        "text": intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?")
+                    })
+            return {"status": "ok"}
+
+    # Fallback to python-telegram-bot application processor for conversations, commands, and buttons
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
