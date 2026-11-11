@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NexaAI")
 
 # Initialize FastAPI
-app = FastAPI(title="Nexa AI Commerce Backend")
+app = FastAPI(title="Nexa AI Elite Commerce Backend")
 
 # -------------------------------------------------------------------
 # Configuration & Environment Variables
@@ -41,12 +41,12 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "Telebirr Merchant / Wallet ID [SECURE-VERIFIED]")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "Awash Corporate Account [SECURE-VERIFIED]")
 
-# Initialize Clients
+# Initialize Clients with Fail-Safe Checks
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(7).write_timeout(7).build()
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
 
 # Onboarding Conversation States
 STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
@@ -60,7 +60,7 @@ transaction_history = []
 @app.get("/")
 @app.head("/")
 async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Multi-Bot Engine with AI-Powered Dashboard & Analytics is live"}
+    return {"status": "healthy", "service": "Nexa AI Elite Multi-Bot Engine is live and optimized for high throughput"}
 
 
 # -------------------------------------------------------------------
@@ -78,8 +78,8 @@ def get_or_create_user_subscription(user_id: int) -> dict:
                     "credits_remaining": sub["credits_remaining"],
                     "is_pro": sub["is_pro"]
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Subscription fetch error: {e}")
 
     default_sub = {
         "trial_expires": now + timedelta(days=3),
@@ -95,8 +95,8 @@ def get_or_create_user_subscription(user_id: int) -> dict:
                 "credits_remaining": 50,
                 "is_pro": False
             }).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Subscription upsert error: {e}")
             
     return default_sub
 
@@ -117,8 +117,8 @@ def deduct_credit(user_id: int):
         if supabase:
             try:
                 supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Credit deduction error: {e}")
 
 
 def log_visitor(user_id: int):
@@ -128,8 +128,8 @@ def log_visitor(user_id: int):
                 "user_id": str(user_id),
                 "last_visit": datetime.now().isoformat()
             }, on_conflict="user_id").execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Visitor logging error: {e}")
 
 
 # -------------------------------------------------------------------
@@ -211,7 +211,8 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
-            masked_token = store["bot_token"][:8] + "..." + store["bot_token"][-4:] if len(store["bot_token"]) > 12 else "***"
+            token_val = store.get("bot_token", "")
+            masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             bots_list_text += (
                 f"{idx}. {store['store_name']}\n"
                 f"• የስራ ዘርፍ: {store.get('industry', 'General').capitalize()}\n"
@@ -295,7 +296,7 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         top_payers_text += f"{idx}. መለያ {uid} — {amt:,.2f} ብር\n"
 
     if not top_payers_text:
-        top_payers_text = "እስካሁን የተመዘገበ ከፋይ ለም።"
+        top_payers_text = "እስካሁን የተመዘገበ ከፋይ የለም።"
 
     summary_text = (
         f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n"
@@ -577,7 +578,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             parsed_result = json.loads(response.choices[0].message.content)
         except Exception as e:
-            print(f"OCR Error: {e}")
+            logger.error(f"OCR Error: {e}")
 
     ref_id = parsed_result.get("reference_id")
     detected_amount = str(parsed_result.get("detected_amount", ""))
@@ -620,7 +621,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     "credits_remaining": 999999
                 }).execute()
             except Exception as e:
-                print(f"DB Error: {e}")
+                logger.error(f"DB Error: {e}")
 
         transaction_history.append({
             "amount_etb": float(expected_amount),
@@ -639,7 +640,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-# --- AI-Powered Master Bot Natural Language Router ---
+# --- AI-Powered Master Bot Natural Language Router with Elite Prompt Handling ---
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     user_id = update.effective_user.id
@@ -655,11 +656,11 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         "3. 'weekly' (if they want weekly reports) "
         "4. 'register' (if they want to create a bot) "
         "5. 'upgrade' (if they want to pay or upgrade to pro) "
-        "6. 'general' (if it's a general question or greeting) "
-        "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic\"}"
+        "6. 'general' (if it's a general question, greeting, or inquiring how you can help) "
+        "Return strictly valid JSON format: {\"intent\": \"category\", \"reply\": \"helpful response in Amharic or English depending on user language\"}"
     )
 
-    intent_result = {"intent": "general", "reply": "ሰላም! እንዴት ልረዳዎ እችላለሁ? ከላይ ያሉትን ትዕዛዞች መጠቀም ይችላሉ።"}
+    intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ? (Hello! What can I do for you today?)"}
     if groq_client:
         try:
             response = groq_client.chat.completions.create(
@@ -668,11 +669,13 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_text}
-                ]
+                ],
+                temperature=0.3,
+                max_tokens=300
             )
             intent_result = json.loads(response.choices[0].message.content)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Master AI Intent Error: {e}")
 
     intent = intent_result.get("intent")
     if intent == "mybots":
@@ -744,8 +747,8 @@ async def startup_event():
                             ))
                     if tasks:
                         await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Startup webhook sync error: {e}")
 
 
 @app.on_event("shutdown")
@@ -795,7 +798,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                 "english": "🇬🇧 Welcome to our store! How may we assist you today?",
                 "oromo": "🇪🇹 Akkam! Baga nagaan dhuftan. Akkamitti si gargaaruu dandeenya?"
             }
-            greeting = lang_greetings.get(lang, "ሰላም! እንዴት ልንረዳዎ እንችላለን?")
+            greeting = lang_greetings.get(lang, "ሰላም! እንዴት ልረዳዎ እንችላለን?")
 
             async with httpx.AsyncClient() as client:
                 await client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
@@ -910,7 +913,7 @@ async def store_chat_webhook(payload: dict):
         deduct_credit(owner_id_int)
 
     lang_instructions = {
-        "amharic": "በአማርኛ ቋንቋ ብቻ መልስ ስጥ (Respond strictly in Amharic script). Be polite, professional, and helpful.",
+        "amharic": "በአማርኛ ቋንቋ ብቻ መልስ ስጥ. Be polite, professional, and helpful.",
         "english": "Respond in English. Be polite, professional, and helpful.",
         "oromo": "Afaan Oromootን deebisi. Tajaajila gaarii kenni."
     }
