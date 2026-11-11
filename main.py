@@ -35,6 +35,7 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.on
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
 
@@ -152,13 +153,14 @@ async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
     if supabase:
         try:
             rev_res = await asyncio.to_thread(
-                lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+                lambda: supabase.table("paid_subscriptions").select("amount_etb, channel, created_at").execute()
             )
             if rev_res.data:
                 for tx in rev_res.data:
-                    tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
-                    if tx_date >= twenty_four_hours_ago:
-                        telebirr_24h_total += float(tx["amount_etb"])
+                    if tx.get("channel") == "TELEBIRR":
+                        tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
+                        if tx_date >= twenty_four_hours_ago:
+                            telebirr_24h_total += float(tx["amount_etb"])
         except Exception as e:
             logger.error(f"Telebirr 24h cap check error: {e}")
 
@@ -387,7 +389,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    owner_id = str(update.effective_user.id)
+    owner_id = str(update.message.from_user.id)
     new_inventory = " ".join(context.args).strip()
 
     if not new_inventory:
@@ -419,7 +421,10 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Onboarding Conversation Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
+    message = update.effective_message
+    if not message:
+        return STORE_NAME
+    await message.reply_text(
         "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
         "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እንገናኝ።\n\n"
         "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: ሀበሻ ፋሽን)"
@@ -583,8 +588,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await weekly_summary_command(update, context)
     elif query.data == "view_my_bots":
         await my_bots_command(update, context)
-    elif query.data == "start_register":
-        await query.message.reply_text("እባክዎ ለመጀመር /register ትዕዛዝ ይጠቀሙ።")
     elif query.data == "upload_receipt":
         await query.message.reply_text("📸 እባክዎ የክፍያ ደረሰኝ ፎቶ (Screenshot) ይላኩ።")
 
@@ -611,7 +614,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     image_bytes = await photo_file.download_as_bytearray()
     base64_image = base64.b64encode(bytes(image_bytes)).decode('utf-8')
     
-    expected_amount = order["amount"]
+    expected_amount_str = order["amount"]
     expected_channel = order["channel"]
     
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None}
@@ -641,7 +644,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error(f"OCR Error: {e}")
 
     ref_id = parsed_result.get("reference_id")
-    detected_amount = str(parsed_result.get("detected_amount", ""))
+    detected_amount_str = str(parsed_result.get("detected_amount", ""))
 
     if ref_id and supabase:
         try:
@@ -656,7 +659,13 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
-    amount_matches = expected_amount in detected_amount or expected_amount.replace(".00", "") in detected_amount
+    # Clean and parse amounts numerically to avoid substring bugs
+    try:
+        clean_expected = float(expected_amount_str.replace(",", "").replace("ብር", "").replace("ETB", "").strip())
+        clean_detected = float(detected_amount_str.replace(",", "").replace("ብር", "").replace("ETB", "").strip())
+        amount_matches = abs(clean_expected - clean_detected) < 1.0
+    except Exception:
+        amount_matches = False
 
     if parsed_result.get("valid") and amount_matches and ref_id:
         if supabase:
@@ -666,7 +675,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                         "user_id": str(user_id),
                         "order_id": order["order_id"],
                         "reference_id": ref_id,
-                        "amount": expected_amount,
+                        "amount": expected_amount_str,
                         "channel": expected_channel,
                         "created_at": datetime.now().isoformat()
                     }).execute()
@@ -676,7 +685,8 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     lambda: supabase.table("paid_subscriptions").insert({
                         "user_id": str(user_id),
                         "order_id": order["order_id"],
-                        "amount_etb": float(expected_amount),
+                        "amount_etb": float(expected_amount_str),
+                        "channel": order.get("destination_code", "TELEBIRR"),
                         "reference_id": ref_id
                     }).execute()
                 )
@@ -701,6 +711,21 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             f"• ሁኔታ: ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!"
         )
     else:
+        # Manual Admin Escalation
+        if ADMIN_TELEGRAM_ID:
+            try:
+                await context.bot.forward_message(
+                    chat_id=ADMIN_TELEGRAM_ID,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id
+                )
+                await context.bot.send_message(
+                    chat_id=ADMIN_TELEGRAM_ID,
+                    text=f"⚠️ Failed OCR Verification for User ID: {user_id}. Order ID: {order['order_id']}. Expected: {expected_amount_str}."
+                )
+            except Exception as e:
+                logger.error(f"Admin escalation error: {e}")
+
         await update.effective_message.reply_text(
             f"📥 ደረሰኙ ለግምገማ ተመዝግቧል\n\nበራስ-ሰር ማረጋገጥ አልተቻለም። አስተዳዳሪው ታይቶለታል።"
         )
@@ -708,7 +733,10 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- Handlers Registration ---
 conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("register", register_start)],
+    entry_points=[
+        CommandHandler("register", register_start),
+        CallbackQueryHandler(register_start, pattern="^start_register$")
+    ],
     states={
         STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
         INDUSTRY: [
@@ -860,8 +888,9 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                     await asyncio.to_thread(
                         lambda: supabase.table("customer_languages").upsert({
                             "chat_id": str(chat_id),
+                            "bot_token": bot_token,
                             "language": lang
-                        }, on_conflict="chat_id").execute()
+                        }, on_conflict="chat_id,bot_token").execute()
                     )
                 except Exception:
                     pass
@@ -908,8 +937,9 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                 await asyncio.to_thread(
                     lambda: supabase.table("customer_languages").upsert({
                         "chat_id": str(chat_id),
+                        "bot_token": bot_token,
                         "language": "amharic"
-                    }, on_conflict="chat_id").execute()
+                    }, on_conflict="chat_id,bot_token").execute()
                 )
             except Exception:
                 pass
@@ -938,7 +968,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if supabase:
         try:
             lang_res = await asyncio.to_thread(
-                lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).execute()
+                lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute()
             )
             if lang_res.data:
                 customer_lang = lang_res.data[0]["language"]
@@ -949,7 +979,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if supabase:
         try:
             hist_res = await asyncio.to_thread(
-                lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).order("created_at", desc=True).limit(6).execute()
+                lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).order("created_at", desc=True).limit(6).execute()
             )
             if hist_res.data:
                 history_messages = list(reversed(hist_res.data))
@@ -1050,8 +1080,8 @@ async def store_chat_webhook(payload: dict):
         try:
             await asyncio.to_thread(
                 lambda: supabase.table("chat_history").insert([
-                    {"chat_id": str(chat_id), "role": "user", "content": user_text, "created_at": datetime.now().isoformat()},
-                    {"chat_id": str(chat_id), "role": "assistant", "content": ai_reply, "created_at": datetime.now().isoformat()}
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": datetime.now().isoformat()},
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": datetime.now().isoformat()}
                 ]).execute()
             )
         except Exception:
