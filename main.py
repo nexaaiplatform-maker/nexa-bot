@@ -39,8 +39,8 @@ ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
 
-TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "Telebirr Merchant / Wallet ID [SECURE-VERIFIED]")
-AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "Awash Corporate Account [SECURE-VERIFIED]")
+TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0911223344")
+AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "1000123456789")
 
 # Initialize Clients with Fail-Safe Checks
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -301,12 +301,13 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• የሂሳብ ቁጥር: {masked_account}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🚨 መመሪያ:\n"
-        f"1. በዝውውር {exact_amount_etb} ብር ያስተላልፉ።\n"
-        f"2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) ያንሱ።\n"
-        f"3. ወዲያውኑ ለማረጋገጥ ደረሰኙን በዚህ ውይይት ውስጥ ይላኩ።"
+        f"1. ከታች ያሉትን ቁልፎች በመጠቀም አካውንት ቁጥሩን ይቅዱ (Copy) ወይም በቀጥታ ይክፈሉ።\n"
+        f"2. በዝውውር {exact_amount_etb} ብር ያስተላልፉ።\n"
+        f"3. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) ያንሱ እና ከታች 'ደረሰኝ ጫን' የሚለውን በመጫን ይላኩ።"
     )
     
     keyboard = [
+        [InlineKeyboardButton(f"📋 ሂሳብ ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
     
@@ -612,6 +613,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await my_bots_command(update, context)
     elif query.data == "upload_receipt":
         await query.message.reply_text("📸 እባክዎ የክፍያ ደረሰኝ ፎቶ (Screenshot) ይላኩ።")
+    elif query.data.startswith("copy_acc_"):
+        acc_num = query.data.replace("copy_acc_", "")
+        await query.answer(text=f"የሂሳብ ቁጥር ተገልብጧል: {acc_num}", show_alert=True)
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1082,7 +1086,7 @@ async def store_chat_webhook(payload: dict):
     ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
     if async_groq_client:
         try:
-            messages = [{"role": "system", "content": system_pattern if 'system_pattern' in locals() else system_prompt}]
+            messages = [{"role": "system", "content": system_prompt}]
             for hm in history_messages:
                 messages.append({"role": hm.get("role", "user"), "content": hm.get("content", "")})
             messages.append({"role": "user", "content": user_text})
