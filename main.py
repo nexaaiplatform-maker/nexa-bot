@@ -53,7 +53,7 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).
 http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
-STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
+AI_PARSE_INVENTORY, BOT_TOKEN = range(2)
 
 
 # -------------------------------------------------------------------
@@ -221,10 +221,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ (ለምሳሌ፦ 'ቦቶቼን አሳየኝ' ወይም 'ገቢዬን ማየት እፈልጋለሁ')\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
+        "1️⃣ /register - የ AI ቦትዎን በራሱ በ AI እንዲዋቀር ማድረግ\n"
         "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
         "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት"
+        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
+        "5️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
     )
     
     keyboard = [
@@ -457,102 +458,53 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"ማሻሻል አልተሳካም: {str(e)}")
 
 
-# --- Onboarding Conversation Handlers ---
+# --- Streamlined 2-Step AI Onboarding Handlers ---
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if not message:
-        return STORE_NAME
+        return AI_PARSE_INVENTORY
     await message.reply_text(
-        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
-        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር ወይም እንደገና እንገናኝ።\n\n"
-        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: ሀበሻ ፋሽን)"
+        "🤖 Nexa AI ስማርት ቦት ፈጣሪ\n\n"
+        "እባክዎ ስለ ንግድዎ፣ ስለ ሪል እስቴት ቤቶችዎ ወይም ስለሚያቀርቡት አገልግሎት **የተዝረከረከ ወይም ያልተዋቀረ ማንኛውንም ጽሑፍ** (Raw Text) እዚህ ይለጥፉ።\n\n"
+        "AI-ው በራሱ የንግድዎን ስም አውጥቶ፣ መረጃውን አዋቅሮ (Structure አድርጎ) ለቦትዎ ይሰራል!"
     )
-    return STORE_NAME
+    return AI_PARSE_INVENTORY
 
 
-async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["store_name"] = update.effective_message.text
-    
-    keyboard = [
-        [InlineKeyboardButton("🛍️ ቸርቻሪ እና እቃዎች", callback_data="ind_retail")],
-        [InlineKeyboardButton("🏋️ ጤና እና የአካል ብቃት", callback_data="ind_fitness")],
-        [InlineKeyboardButton("🏠 የቤት እና ንብረት ሽያጭ", callback_data="ind_realestate")],
-        [InlineKeyboardButton("🩺 ህክምና እና ክሊኒክ", callback_data="ind_clinic")],
-        [InlineKeyboardButton("🤝 ኤጀንሲ እና ደላላ", callback_data="ind_broker")],
-        [InlineKeyboardButton("⚙️ አጠቃላይ አገልግሎቶች", callback_data="ind_general")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+async def receive_and_ai_parse_raw_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw_text = update.effective_message.text
+    await update.effective_message.reply_text("⏳ AI-ው መረጃዎን በመተንተን እና በማዋቀር ላይ ይገኛል፣ እባክዎ ትንሽ ይጠብቁ...")
+
+    parsed_store_name = "My Smart Store"
+    structured_inventory = raw_text
+
+    if async_groq_client:
+        try:
+            prompt = (
+                f"Analyze this raw, unstructured business or real estate catalog data:\n{raw_text}\n\n"
+                f"Extract and structure it cleanly. Return strictly valid JSON format:\n"
+                f'{{"store_name": "Extracted Store or Real Estate Company Name", "structured_catalog": "Cleaned up and structured presentation of the listings/inventory/prices"}}'
+            )
+            response = await async_groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            data = json.loads(response.choices[0].message.content)
+            parsed_store_name = data.get("store_name", parsed_store_name)
+            structured_inventory = data.get("structured_catalog", raw_text)
+        except Exception as e:
+            logger.error(f"AI Parse Error: {e}")
+
+    context.user_data["store_name"] = parsed_store_name
+    context.user_data["inventory_data"] = structured_inventory
+
     await update.effective_message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
-        "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
-        reply_markup=reply_markup
-    )
-    return INDUSTRY
-
-
-async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chosen_industry = "general"
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        chosen_industry = query.data.replace("ind_", "")
-        target_message = query.edit_message_text
-    else:
-        chosen_industry = update.effective_message.text.lower()
-        target_message = update.effective_message.reply_text
-
-    context.user_data["industry"] = chosen_industry
-
-    keyboard = [
-        [InlineKeyboardButton("💎 ቪአይፒ ኤክስክሉቲቭ", callback_data="theme_executive")],
-        [InlineKeyboardButton("⚡ ከፍተኛ ሽያጭ አቅጣጫ", callback_data="theme_sales")],
-        [InlineKeyboardButton("🌿 ወዳጃዊ አማካሪ", callback_data="theme_friendly")],
-        [InlineKeyboardButton("🎯 ቀጥተኛ እና አጭር", callback_data="theme_minimalist")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await target_message(
-        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
-        "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
-        reply_markup=reply_markup
-    )
-    return UI_THEME
-
-
-async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chosen_theme = "executive"
-    
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        chosen_theme = query.data.replace("theme_", "")
-        target_message = query.edit_message_text
-    else:
-        text = update.effective_message.text.lower()
-        if "sales" in text:
-            chosen_theme = "sales"
-        elif "friendly" in text:
-            chosen_theme = "friendly"
-        elif "minimalist" in text:
-            chosen_theme = "minimalist"
-        else:
-            chosen_theme = "executive"
-        target_message = update.effective_message.reply_text
-
-    context.user_data["ui_theme"] = chosen_theme
-    
-    await target_message(
-        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ፒዲኤፍ ጽሑፍ ከታች ይለጥፉ:"
-    )
-    return INVENTORY
-
-
-async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["inventory_data"] = update.effective_message.text
-    await update.effective_message.reply_text(
-        "ሊጠናቀቅ ነው።!\n\n"
-        "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
+        f"✅ AI-ው መረጃውን በተሳካ ሁኔታ ተረድቷል!\n\n"
+        f"• የተገኘው የንግድ/ድርጅት ስም: **{parsed_store_name}**\n\n"
+        f"አሁን የመጨረሻው ደረጃ:\n"
+        f"ወደ Telegram @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ የሰጡዎትን **የቦት ቶከን (Bot Token)** እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
 
@@ -582,7 +534,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
-            # Safe payload containing only essential columns to prevent schema errors
             store_payload = {
                 "bot_token": bot_token,
                 "owner_telegram_id": owner_telegram_id,
@@ -597,10 +548,10 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return BOT_TOKEN
 
     success_msg = (
-        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
+        f"🎉 እንኳን ደስ አለዎት! የ AI ሪል እስቴት/ንግድ ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
         f"• የንግድ ስም: {store_name}\n"
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
-        "ቦትዎ አሁን ማንኛውንም የሪል እስቴት ወይም የንግድ መረጃ ተረድቶ ለደንበኞች ምላሽ ለመስጠት ዝግጁ ነው።"
+        "ቦትዎ አሁን ማንኛውንም የተዝረከረከ መረጃ ተረድቶ ለደንበኞች ጥያቄዎች በብልጠት ምላሽ ለመስጠት ዝግጁ ነው።"
     )
     await update.effective_message.reply_text(success_msg)
     return ConversationHandler.END
@@ -775,16 +726,7 @@ conv_handler = ConversationHandler(
         CallbackQueryHandler(register_start, pattern="^start_register$")
     ],
     states={
-        STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
-        INDUSTRY: [
-            CallbackQueryHandler(receive_industry, pattern="^ind_"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
-        ],
-        UI_THEME: [
-            CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
-        ],
-        INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
+        AI_PARSE_INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_and_ai_parse_raw_data)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
     },
     fallbacks=[CommandHandler("cancel", cancel_registration)],
@@ -803,7 +745,7 @@ telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 # --- Master Natural Language Fallback Handler ---
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data and len(context.user_data) > 0 and any(k in context.user_data for k in ["store_name", "industry", "ui_theme", "inventory_data"]):
+    if context.user_data and len(context.user_data) > 0 and any(k in context.user_data for k in ["store_name", "inventory_data"]):
         return
 
     user_text = update.effective_message.text
@@ -1092,7 +1034,7 @@ async def store_chat_webhook(payload: dict):
     Current Customer Language Preference: {customer_lang}
     {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
-    Live Real Estate & Store Catalog Data (User Custom Uploaded):
+    Live Real Estate & Store Catalog Data (AI Structured):
     {inventory_data}
     
     Guidelines for AI Responses:
