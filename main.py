@@ -378,14 +378,12 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
 
     if supabase:
         try:
-            # Fetch Bot stores owned by this user
             stores_res = await asyncio.to_thread(
                 lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", user_id).execute()
             )
             bot_tokens = [s["bot_token"] for s in stores_res.data] if stores_res.data else []
 
             if bot_tokens:
-                # Count tenant bot visitors in the last 7 days
                 vis_res = await asyncio.to_thread(
                     lambda: supabase.table("tenant_visitors").select("chat_id, created_at").in_("bot_token", bot_tokens).execute()
                 )
@@ -421,7 +419,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
     weekly_text = (
         f"📈 የሳምንቱ አጠቃላይ ሪፖርት (Weekly Summary)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (ഈ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
+        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
         f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
         f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -821,8 +819,12 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
-# --- Master Natural Language Fallback Handler ---
+# --- Master Natural Language Fallback Handler (Fixed to bypass during ConversationHandler) ---
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # If the user is currently inside a ConversationHandler (like /register), ignore this fallback!
+    if context.user_data and len(context.user_data) > 0 and any(k in context.user_data for k in ["store_name", "industry", "ui_theme", "inventory_data"]):
+        return
+
     user_text = update.effective_message.text
     if not user_text or user_text.startswith("/"):
         return
@@ -988,7 +990,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         return {"ok": True}
 
-    # Log tenant visitor stats for weekly summary tracking
     if supabase:
         try:
             await asyncio.to_thread(
