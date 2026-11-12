@@ -528,7 +528,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ui_theme"] = chosen_theme
     
     await target_message(
-        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን ወይም የዋጋ ዝርዝርዎን ከታች ይለጥፉ:"
+        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ፒዲኤፍ ጽሑፍ ከታች ይለጥፉ:"
     )
     return INVENTORY
 
@@ -569,25 +569,41 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
+            # Safe Fail-safe Payload preventing schema column mismatches
+            store_payload = {
+                "bot_token": bot_token,
+                "owner_telegram_id": owner_telegram_id,
+                "store_name": store_name,
+                "industry": industry,
+                "ui_theme": ui_theme,
+                "inventory_data": inventory_data
+            }
             await asyncio.to_thread(
-                lambda: supabase.table("stores").upsert({
+                lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
+            )
+        except Exception as e:
+            logger.error(f"Supabase store upsert error: {e}")
+            # Fallback retry with basic columns just in case schema is outdated
+            try:
+                fallback_payload = {
                     "bot_token": bot_token,
                     "owner_telegram_id": owner_telegram_id,
                     "store_name": store_name,
-                    "industry": industry,
-                    "ui_theme": ui_theme,
                     "inventory_data": inventory_data
-                }, on_conflict="bot_token").execute()
-            )
-        except Exception as e:
-            await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
+                }
+                await asyncio.to_thread(
+                    lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
+                )
+            except Exception as inner_e:
+                await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(inner_e)}")
+                return BOT_TOKEN
 
     success_msg = (
         f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
         f"• የንግድ ስም: {store_name}\n"
         f"• ዘርፍ: {industry.capitalize()}\n"
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
-        "ቦትዎ አሁን ሙሉ በሙሉ አገልግሎት ለመስጠት ዝግጁ ነው።"
+        "ቦትዎ አሁን ማንኛውንም የሪል እስቴት ወይም የንግድ መረጃ ተረድቶ ለደንበኞች ምላሽ ለመስጠት ዝግጁ ነው።"
     )
     await update.effective_message.reply_text(success_msg)
     return ConversationHandler.END
@@ -1066,10 +1082,10 @@ async def store_chat_webhook(payload: dict):
     }
 
     theme_prompts = {
-        "executive": f"You are a professional executive VIP concierge for {store_name} in the {industry} sector.",
-        "sales": f"You are a high-energy sales closer and growth expert for {store_name} in the {industry} sector.",
-        "friendly": f"You are a warm, friendly, and approachable customer advisor for {store_name} in the {industry} sector.",
-        "minimalist": f"You are a direct, concise, and efficient assistant for {store_name} in the {industry} sector."
+        "executive": f"You are a professional executive VIP concierge for {store_name} specialized in {industry} properties and services.",
+        "sales": f"You are a high-energy sales closer and real estate growth expert for {store_name}.",
+        "friendly": f"You are a warm, friendly, and approachable customer advisor for {store_name}.",
+        "minimalist": f"You are a direct, concise, and efficient property assistant for {store_name}."
     }
 
     system_prompt = f"""
@@ -1077,10 +1093,13 @@ async def store_chat_webhook(payload: dict):
     Current Customer Language Preference: {customer_lang}
     {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
-    Live Store Context & Inventory:
+    Live Real Estate & Store Catalog Data (User Custom Uploaded):
     {inventory_data}
     
-    Security & Customer Notification Rule: If a user asks about security, order status, or payments, reassure them with clear transaction safety notes and encrypted session guarantees. Always prioritize customer trust and safety.
+    Guidelines for AI Responses:
+    - Accurately parse and present listings, prices, locations, and descriptions provided above.
+    - If customers ask about property booking or visits, guide them warmly to leave their name and phone number.
+    - Security & Payment Rule: If a user asks about payment or security, reassure them with clear encrypted session guarantees and professional standards.
     """
 
     ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
