@@ -368,14 +368,33 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
     now = datetime.now(timezone.utc)
     week_ago = now - timedelta(days=7)
     weekly_revenue = 0
     weekly_subscribers = 0
     weekly_visitors = 0
+    tenant_visitors_count = 0
 
     if supabase:
         try:
+            # Fetch Bot stores owned by this user
+            stores_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", user_id).execute()
+            )
+            bot_tokens = [s["bot_token"] for s in stores_res.data] if stores_res.data else []
+
+            if bot_tokens:
+                # Count tenant bot visitors in the last 7 days
+                vis_res = await asyncio.to_thread(
+                    lambda: supabase.table("tenant_visitors").select("chat_id, created_at").in_("bot_token", bot_tokens).execute()
+                )
+                if vis_res.data:
+                    for v in vis_res.data:
+                        v_date = parse_dt(v.get("created_at"))
+                        if v_date >= week_ago:
+                            tenant_visitors_count += 1
+
             rev_res = await asyncio.to_thread(
                 lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
             )
@@ -387,11 +406,11 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
                             weekly_revenue += float(tx["amount_etb"])
                             weekly_subscribers += 1
 
-            vis_res = await asyncio.to_thread(
+            vis_res2 = await asyncio.to_thread(
                 lambda: supabase.table("store_visitors").select("last_visit").execute()
             )
-            if vis_res.data:
-                for vis in vis_res.data:
+            if vis_res2.data:
+                for vis in vis_res2.data:
                     if vis.get("last_visit"):
                         vis_date = parse_dt(vis["last_visit"])
                         if vis_date >= week_ago:
@@ -402,7 +421,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
     weekly_text = (
         f"📈 የሳምንቱ አጠቃላይ ሪፖርት (Weekly Summary)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• በዚህ ሳምንት የጎብኚዎች ቁጥር: {weekly_visitors} አዲስ ተጠቃሚዎች\n"
+        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (ഈ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
         f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
         f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -569,7 +588,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
-            # Safe Fail-safe Payload preventing schema column mismatches
             store_payload = {
                 "bot_token": bot_token,
                 "owner_telegram_id": owner_telegram_id,
@@ -583,7 +601,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"Supabase store upsert error: {e}")
-            # Fallback retry with basic columns just in case schema is outdated
             try:
                 fallback_payload = {
                     "bot_token": bot_token,
@@ -701,7 +718,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
-    # Clean and parse amounts numerically to avoid substring bugs
     try:
         clean_expected = float(expected_amount_str.replace(",", "").replace("ብር", "").replace("ETB", "").strip())
         clean_detected = float(detected_amount_str.replace(",", "").replace("ብር", "").replace("ETB", "").strip())
@@ -753,7 +769,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             f"• ሁኔታ: ያልተገደበ የፕሮ አገልግሎት በሥራ ላይ አለ!"
         )
     else:
-        # Manual Admin Escalation
         if ADMIN_TELEGRAM_ID:
             try:
                 await context.bot.forward_message(
@@ -806,7 +821,7 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
-# --- Master Natural Language Fallback Handler (Placed last to protect ConversationHandler) ---
+# --- Master Natural Language Fallback Handler ---
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.effective_message.text
     if not user_text or user_text.startswith("/"):
@@ -972,6 +987,19 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             "text": "መደብሩ አልተገኘም (Store configuration not found)."
         })
         return {"ok": True}
+
+    # Log tenant visitor stats for weekly summary tracking
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("tenant_visitors").upsert({
+                    "bot_token": bot_token,
+                    "chat_id": str(chat_id),
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }, on_conflict="bot_token,chat_id").execute()
+            )
+        except Exception:
+            pass
 
     if user_text == "/start":
         if supabase:
