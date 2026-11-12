@@ -245,7 +245,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("store_name", "industry", "ui_theme", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
+            lambda: supabase.table("stores").select("store_name", "bot_token", "created_at").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
@@ -257,8 +257,6 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             bots_list_text += (
                 f"{idx}. {store['store_name']}\n"
-                f"• የስራ ዘርፍ: {store.get('industry', 'General').capitalize()}\n"
-                f"• ባህሪ: {store.get('ui_theme', 'Executive').capitalize()}\n"
                 f"• ቶከን ቁልፍ: {masked_token}\n"
                 f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
@@ -564,8 +562,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_telegram_id = str(update.effective_user.id)
     
     store_name = context.user_data.get("store_name", "My Store")
-    industry = context.user_data.get("industry", "general")
-    ui_theme = context.user_data.get("ui_theme", "executive")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
@@ -586,37 +582,23 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
+            # Safe payload containing only essential columns to prevent schema errors
             store_payload = {
                 "bot_token": bot_token,
                 "owner_telegram_id": owner_telegram_id,
                 "store_name": store_name,
-                "industry": industry,
-                "ui_theme": ui_theme,
                 "inventory_data": inventory_data
             }
             await asyncio.to_thread(
                 lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
             )
         except Exception as e:
-            logger.error(f"Supabase store upsert error: {e}")
-            try:
-                fallback_payload = {
-                    "bot_token": bot_token,
-                    "owner_telegram_id": owner_telegram_id,
-                    "store_name": store_name,
-                    "inventory_data": inventory_data
-                }
-                await asyncio.to_thread(
-                    lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
-                )
-            except Exception as inner_e:
-                await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(inner_e)}")
-                return BOT_TOKEN
+            await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ በማስቀመጥ ላይ ችግር አጋጥሟል: {str(e)}")
+            return BOT_TOKEN
 
     success_msg = (
         f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
         f"• የንግድ ስም: {store_name}\n"
-        f"• ዘርፍ: {industry.capitalize()}\n"
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
         "ቦትዎ አሁን ማንኛውንም የሪል እስቴት ወይም የንግድ መረጃ ተረድቶ ለደንበኞች ምላሽ ለመስጠት ዝግጁ ነው።"
     )
@@ -819,9 +801,8 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 
 
-# --- Master Natural Language Fallback Handler (Fixed to bypass during ConversationHandler) ---
+# --- Master Natural Language Fallback Handler ---
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # If the user is currently inside a ConversationHandler (like /register), ignore this fallback!
     if context.user_data and len(context.user_data) > 0 and any(k in context.user_data for k in ["store_name", "industry", "ui_theme", "inventory_data"]):
         return
 
@@ -1062,8 +1043,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "user_text": user_text,
         "bot_token": bot_token,
         "store_name": store.get("store_name", "Our Business"),
-        "industry": store.get("industry", "general"),
-        "ui_theme": store.get("ui_theme", "executive"),
         "inventory_data": store.get("inventory_data", ""),
         "owner_telegram_id": store.get("owner_telegram_id"),
         "username": username,
@@ -1081,8 +1060,6 @@ async def store_chat_webhook(payload: dict):
     user_text = payload.get("user_text", "")
     bot_token = payload.get("bot_token")
     store_name = payload.get("store_name", "Our Business")
-    industry = payload.get("industry", "general")
-    ui_theme = payload.get("ui_theme", "executive")
     inventory_data = payload.get("inventory_data", "")
     owner_telegram_id = payload.get("owner_telegram_id")
     customer_lang = payload.get("customer_lang", "amharic")
@@ -1110,15 +1087,8 @@ async def store_chat_webhook(payload: dict):
         "oromo": "Afaan Oromootን deebisi. Tajaajila gaarii kenni."
     }
 
-    theme_prompts = {
-        "executive": f"You are a professional executive VIP concierge for {store_name} specialized in {industry} properties and services.",
-        "sales": f"You are a high-energy sales closer and real estate growth expert for {store_name}.",
-        "friendly": f"You are a warm, friendly, and approachable customer advisor for {store_name}.",
-        "minimalist": f"You are a direct, concise, and efficient property assistant for {store_name}."
-    }
-
     system_prompt = f"""
-    {theme_prompts.get(ui_theme, theme_prompts['executive'])}
+    You are a professional executive VIP concierge for {store_name} specialized in properties and services.
     Current Customer Language Preference: {customer_lang}
     {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
