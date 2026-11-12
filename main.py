@@ -5,7 +5,7 @@ import httpx
 import base64
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, HTTPException, status
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -57,6 +57,23 @@ STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
 
 
 # -------------------------------------------------------------------
+# Safe UTC Datetime Parser Helper
+# -------------------------------------------------------------------
+def parse_dt(dt_val) -> datetime:
+    if isinstance(dt_val, datetime):
+        return dt_val if dt_val.tzinfo else dt_val.replace(tzinfo=timezone.utc)
+    if not dt_val:
+        return datetime.now(timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(dt_val).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+# -------------------------------------------------------------------
 # Root Health Check (Supports GET and HEAD for UptimeRobot)
 # -------------------------------------------------------------------
 @app.get("/")
@@ -69,7 +86,7 @@ async def root_health_check():
 # Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
 # -------------------------------------------------------------------
 async def get_or_create_user_subscription(user_id: int) -> dict:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if supabase:
         try:
             res = await asyncio.to_thread(
@@ -78,15 +95,16 @@ async def get_or_create_user_subscription(user_id: int) -> dict:
             if res.data:
                 sub = res.data[0]
                 return {
-                    "trial_expires": datetime.fromisoformat(sub["trial_expires"]),
+                    "trial_expires": parse_dt(sub["trial_expires"]),
                     "credits_remaining": sub["credits_remaining"],
                     "is_pro": sub["is_pro"]
                 }
         except Exception as e:
             logger.error(f"Subscription fetch error: {e}")
 
+    default_expiry = now + timedelta(days=3)
     default_sub = {
-        "trial_expires": now + timedelta(days=3),
+        "trial_expires": default_expiry,
         "credits_remaining": 50,
         "is_pro": False
     }
@@ -96,7 +114,7 @@ async def get_or_create_user_subscription(user_id: int) -> dict:
             await asyncio.to_thread(
                 lambda: supabase.table("subscriptions").upsert({
                     "user_id": str(user_id),
-                    "trial_expires": default_sub["trial_expires"].isoformat(),
+                    "trial_expires": default_expiry.isoformat(),
                     "credits_remaining": 50,
                     "is_pro": False
                 }).execute()
@@ -111,7 +129,9 @@ async def verify_active_access(user_id: int) -> bool:
     sub = await get_or_create_user_subscription(user_id)
     if sub["is_pro"]:
         return True
-    if datetime.now() < sub["trial_expires"] and sub["credits_remaining"] > 0:
+    now = datetime.now(timezone.utc)
+    trial_exp = parse_dt(sub["trial_expires"])
+    if now < trial_exp and sub["credits_remaining"] > 0:
         return True
     return False
 
@@ -135,7 +155,7 @@ async def log_visitor(user_id: int):
             await asyncio.to_thread(
                 lambda: supabase.table("store_visitors").upsert({
                     "user_id": str(user_id),
-                    "last_visit": datetime.now().isoformat()
+                    "last_visit": datetime.now(timezone.utc).isoformat()
                 }, on_conflict="user_id").execute()
             )
         except Exception as e:
@@ -146,7 +166,7 @@ async def log_visitor(user_id: int):
 # Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
 # -------------------------------------------------------------------
 async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     twenty_four_hours_ago = now - timedelta(hours=24)
     
     telebirr_24h_total = 0.0
@@ -157,8 +177,8 @@ async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
             )
             if rev_res.data:
                 for tx in rev_res.data:
-                    if tx.get("channel") == "TELEBIRR":
-                        tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
+                    if tx.get("channel") == "TELEBIRR" and tx.get("created_at"):
+                        tx_date = parse_dt(tx["created_at"])
                         if tx_date >= twenty_four_hours_ago:
                             telebirr_24h_total += float(tx["amount_etb"])
         except Exception as e:
@@ -183,7 +203,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     sub_data = await get_or_create_user_subscription(user_id)
     has_access = await verify_active_access(user_id)
-    expires_str = sub_data["trial_expires"].strftime("%Y-%m-%d %H:%M UTC")
+    expires_str = parse_dt(sub_data["trial_expires"]).strftime("%Y-%m-%d %H:%M UTC")
     
     if sub_data["is_pro"]:
         status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
@@ -347,7 +367,7 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     week_ago = now - timedelta(days=7)
     weekly_revenue = 0
     weekly_subscribers = 0
@@ -360,19 +380,21 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             )
             if rev_res.data:
                 for tx in rev_res.data:
-                    tx_date = datetime.fromisoformat(tx["created_at"].replace("Z", "+00:00").split("+")[0])
-                    if tx_date >= week_ago:
-                        weekly_revenue += float(tx["amount_etb"])
-                        weekly_subscribers += 1
+                    if tx.get("created_at"):
+                        tx_date = parse_dt(tx["created_at"])
+                        if tx_date >= week_ago:
+                            weekly_revenue += float(tx["amount_etb"])
+                            weekly_subscribers += 1
 
             vis_res = await asyncio.to_thread(
                 lambda: supabase.table("store_visitors").select("last_visit").execute()
             )
             if vis_res.data:
                 for vis in vis_res.data:
-                    vis_date = datetime.fromisoformat(vis["last_visit"].replace("Z", "+00:00").split("+")[0])
-                    if vis_date >= week_ago:
-                        weekly_visitors += 1
+                    if vis.get("last_visit"):
+                        vis_date = parse_dt(vis["last_visit"])
+                        if vis_date >= week_ago:
+                            weekly_visitors += 1
         except Exception as e:
             logger.error(f"Weekly summary error: {e}")
 
@@ -629,7 +651,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
             response = await async_groq_client.chat.completions.create(
-                model="meta-llama/llama-3.1-8b-instant",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -677,7 +699,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                         "reference_id": ref_id,
                         "amount": expected_amount_str,
                         "channel": expected_channel,
-                        "created_at": datetime.now().isoformat()
+                        "created_at": datetime.now(timezone.utc).isoformat()
                     }).execute()
                 )
 
@@ -786,7 +808,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama-3.3-70b-versatile",
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1060,13 +1082,13 @@ async def store_chat_webhook(payload: dict):
     ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
     if async_groq_client:
         try:
-            messages = [{"role": "system", "content": system_prompt}]
+            messages = [{"role": "system", "content": system_pattern if 'system_pattern' in locals() else system_prompt}]
             for hm in history_messages:
                 messages.append({"role": hm.get("role", "user"), "content": hm.get("content", "")})
             messages.append({"role": "user", "content": user_text})
 
             completion = await async_groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama-3.3-70b-versatile",
                 messages=messages,
                 temperature=0.7,
                 max_tokens=600
@@ -1080,8 +1102,8 @@ async def store_chat_webhook(payload: dict):
         try:
             await asyncio.to_thread(
                 lambda: supabase.table("chat_history").insert([
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": datetime.now().isoformat()},
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": datetime.now().isoformat()}
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": datetime.now(timezone.utc).isoformat()},
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": datetime.now(timezone.utc).isoformat()}
                 ]).execute()
             )
         except Exception:
