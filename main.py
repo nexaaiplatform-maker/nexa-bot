@@ -28,12 +28,12 @@ logger = logging.getLogger("NexaAI")
 app = FastAPI(title="Nexa AI Elite Commerce Backend")
 
 # -------------------------------------------------------------------
-# Configuration & Environment Variables
+# Configuration & Environment Variables (Supabase Correct Project Linked)
 # -------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kywhgitjmzxqfkpisdjf.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_CPEJNaRfmTqSoBuEq12gLg_cCxVEw-u")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
@@ -52,7 +52,7 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
-# Onboarding Conversation States
+# Onboarding Conversation States (AI Raw Data Parser)
 AI_PARSE_INVENTORY, BOT_TOKEN = range(2)
 
 
