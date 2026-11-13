@@ -217,36 +217,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
     elif has_access:
         status_text = (
-            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)
-"
-            f"• የሚያበቃበት ጊዜ: {expires_str}
-"
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
+            f"• የሚያበቃበት ጊዜ: {expires_str}\n"
             f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
         )
     else:
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!
-
-"
-        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።
-
-"
-        f"📊 የመለያዎ ሁኔታ:
-{status_text}
-
-"
-        "🎯 ፈጣን መመሪያ:
-"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ
-"
-        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ
-"
-        "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ
-"
-        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት
-"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
+        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።\n\n"
+        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
+        "🎯 ፈጣን መመሪያ:\n"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
+        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
         "5️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
     )
     
@@ -274,23 +260,15 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ
-━━━━━━━━━━━━━━━━━━━━━━
-
-"
+        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             bots_list_text += (
-                f"{idx}. {store['store_name']}
-"
-                f"• ቶከን ቁልፍ: {masked_token}
-"
-                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}
-"
-                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅
-
-"
+                f"{idx}. {store['store_name']}\n"
+                f"• ቶከን ቁልፍ: {masked_token}\n"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n"
+                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
         await update.effective_message.reply_text(bots_list_text)
     except Exception as e:
@@ -318,24 +296,14 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Pending order save error: {e}")
     
     invoice_text = (
-        f"🔒 ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ
-"
-        f"━━━━━━━━━━━━━━━━━━━━━━
-"
-        f"• የደረሰኝ ቁጥር: {order_id}
-"
-        f"• የክፍያ መጠን: {exact_amount_etb} ብር
-"
-        f"• የክፍያ መንገድ: {channel_name}
-"
-        f"• የሂሳብ ቁጥር: {masked_account}
-"
-        f"━━━━━━━━━━━━━━━━━━━━━━
-
-"
-        f"🚨 መመሪያ:
-1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb} ብር ያስተላልፉ።
-2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
+        f"🔒 ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• የደረሰኝ ቁጥር: {order_id}\n"
+        f"• የክፍያ መጠን: {exact_amount_etb} ብር\n"
+        f"• የክፍያ መንገድ: {channel_name}\n"
+        f"• የሂሳብ ቁጥር: {masked_account}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🚨 መመሪያ:\n1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb} ብር ያስተላልፉ።\n2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
     )
     keyboard = [
         [InlineKeyboardButton(f"📋 ሂሳብ ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
@@ -369,21 +337,12 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Summary fetch error: {e}")
 
-    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር
-" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
+    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር\n" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
     summary_text = (
-        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ
-━━━━━━━━━━━━━━━━━━━━━━
-"
-        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች
-"
-        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች
-"
-        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር
-━━━━━━━━━━━━━━━━━━━━━━
-
-🏆 ከፍተኛ ከፋዮች:
-{top_payers_text}"
+        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\n"
+        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች\n"
+        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n🏆 ከፍተኛ ከፋዮች:\n{top_payers_text}"
     )
     await update.effective_message.reply_text(summary_text)
 
@@ -421,17 +380,10 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)
-━━━━━━━━━━━━━━━━━━━━━━
-"
-        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች
-"
-        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች
-"
-        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር
-━━━━━━━━━━━━━━━━━━━━━━
-
-💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
+        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
+        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
+        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
     )
     await update.effective_message.reply_text(weekly_text)
 
@@ -442,11 +394,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.effective_message.reply_text(
-            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:
-
-/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።
-ምሳሌ:
-/update ጫማ - 2,800 ብር"
+            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:\n\n/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።\nምሳሌ:\n/update ጫማ - 2,800 ብር"
         )
         return
 
@@ -471,12 +419,8 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         return STORE_NAME
     await message.reply_text(
-        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት
-
-"
-        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።
-
-"
+        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።\n\n"
         "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: አዲስ ሪል እስቴት)"
     )
     return STORE_NAME
@@ -496,9 +440,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.effective_message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.
-
-"
+        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
         "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
         reply_markup=reply_markup
     )
@@ -527,9 +469,7 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.
-
-"
+        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
         "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
         reply_markup=reply_markup
     )
@@ -558,9 +498,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.effective_message.text
     await update.effective_message.reply_text(
-        "ሊጠናቀቅ ነው።!
-
-"
+        "ሊጠናቀቅ ነው።!\n\n"
         "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -604,16 +542,10 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return BOT_TOKEN
 
     await update.effective_message.reply_text(
-        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀
-
-"
-        f"• የንግድ ስም: {store_name}
-"
-        f"• የቦት ዘይቤ: {ui_theme.capitalize()}
-"
-        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅
-
-"
+        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
+        f"• የንግድ ስም: {store_name}\n"
+        f"• የቦት ዘይቤ: {ui_theme.capitalize()}\n"
+        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
         "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) ቀጥተኛ ውይይት ይጀምራሉ።"
     )
     return ConversationHandler.END
@@ -674,12 +606,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if async_groq_client:
         try:
             prompt = (
-                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:
-"
-                f"1. Transaction Reference ID or Confirmation Code (string)
-"
-                f"2. Total Amount in ETB transferred (number or string without commas)
-"
+                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
+                f"1. Transaction Reference ID or Confirmation Code (string)\n"
+                f"2. Total Amount in ETB transferred (number or string without commas)\n"
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
@@ -726,8 +655,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
-        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹
-• የግብይት መለያ: {ref_id}")
+        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n• የግብይት መለያ: {ref_id}")
     else:
         if ADMIN_TELEGRAM_ID:
             try:
@@ -750,7 +678,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "Classify into: 'mybots', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        "Return strictly valid JSON: {"intent": "category", "reply": "helpful response"}"
+        "Return strictly valid JSON: {\"intent\": \"category\", \"reply\": \"helpful response\"}"
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ?"}
     if async_groq_client:
@@ -872,9 +800,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         }
 
         direct_welcome = (
-            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!
-
-"
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። በምን ልረዳዎ?"
         )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
