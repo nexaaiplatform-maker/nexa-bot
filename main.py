@@ -541,7 +541,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• የንግድ ስም: {store_name}\n"
         f"• የቦት ዘይቤ: {ui_theme.capitalize()}\n"
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
-        "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) በመረጡት ቋንቋ እና ዘይቤ ምላሽ ይሰል።"
+        "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) ቀጥተኛ ውይይት ይጀምራሉ።"
     )
     return ConversationHandler.END
 
@@ -746,30 +746,6 @@ async def telegram_webhook(request: Request):
 async def tenant_bot_webhook(bot_token: str, request: Request):
     data = await request.json()
     
-    if "callback_query" in data:
-        cq = data["callback_query"]
-        chat_id = cq["message"]["chat"]["id"]
-        callback_data = cq["data"]
-        
-        if callback_data.startswith("lang_"):
-            lang = callback_data.replace("lang_", "")
-            if supabase:
-                try:
-                    await asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
-                        "chat_id": str(chat_id), "bot_token": bot_token, "language": lang
-                    }, on_conflict="chat_id,bot_token").execute())
-                except Exception:
-                    pass
-
-            lang_greetings = {
-                "amharic": "🇪🇹 ሰላም! እንኳን ወደ መደብራችን በደህና መጡ። በምን ልረዳዎ እንችላለን?",
-                "english": "🇬🇧 Welcome to our store! How may we assist you today?",
-                "oromo": "🇪🇹 Akkam! Baga nagaan dhuftan. Akkamitti si gargaaruu dandeenya?"
-            }
-            await http_client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json={"callback_query_id": cq["id"]})
-            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={"chat_id": chat_id, "text": lang_greetings.get(lang, "ሰላም!")})
-            return {"ok": True}
-
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
@@ -801,14 +777,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             pass
 
     if user_text == "/start":
-        if supabase:
-            try:
-                await asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
-                    "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
-                }, on_conflict="chat_id,bot_token").execute())
-            except Exception:
-                pass
-
         ui_theme = store.get("ui_theme", "executive")
         theme_intros = {
             "energetic": "🚀 በደስታ ተቀብለናል! ዛሬ ምን እንድንሰራሎት ይፈልጋሉ?",
@@ -818,31 +786,17 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             "minimalist": "🎯 ሰላም! በምን ልረዳዎ እችላለሁ?"
         }
 
-        keyboard = [
-            [InlineKeyboardButton("🇪🇹 አማርኛ (Amharic)", callback_data="lang_amharic")],
-            [InlineKeyboardButton("🇬🇧 English", callback_data="lang_english")],
-            [InlineKeyboardButton("🇪🇹 Afaan Oromo", callback_data="lang_oromo")]
-        ]
+        direct_welcome = (
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
+            f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። በምን ልረዳዎ?"
+        )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
             "chat_id": chat_id,
-            "text": f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\nእባክዎ የሚፈልጉትን ቋንቋ ይምረጡ:",
-            "reply_markup": {"inline_keyboard": keyboard}
-        })
-        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": "🛡️ **የደህንነት እና የታማኝነት ማስታወሻ**: የእርስዎ ውይይቶች እና መረጃዎች ሙሉ በሙሉ የተመሰጠሩ (Encrypted) እና ደህንነታቸው የተጠበቁ ናቸው።"
+            "text": direct_welcome
         })
         return {"ok": True}
 
     customer_lang = "amharic"
-    if supabase:
-        try:
-            lang_res = await asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute())
-            if lang_res.data:
-                customer_lang = lang_res.data[0]["language"]
-        except Exception:
-            pass
-
     history_messages = []
     if supabase:
         try:
