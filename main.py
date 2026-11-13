@@ -42,9 +42,14 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
-# Initialize Clients with Fail-Safe Checks
+# Initialize Clients with Fail-Safe Checks & Logging
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+if not supabase:
+    logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
+
 async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+if not async_groq_client:
+    logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
 
 # Master Telegram Bot Application
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
@@ -685,8 +690,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                 temperature=0.3
             )
             intent_result = json.loads(response.choices[0].message.content)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Master message intent error: {e}")
 
     intent = intent_result.get("intent")
     if intent == "mybots":
