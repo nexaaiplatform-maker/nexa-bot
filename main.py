@@ -32,8 +32,8 @@ app = FastAPI(title="Nexa AI Elite Commerce Backend")
 # -------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kywhgitjmzxqfkpisdjf.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_CPEJNaRfmTqSoBuEq12gLg_cCxVEw-u")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
@@ -49,15 +49,15 @@ async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # Master Telegram Bot Application
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
 
-# Global HTTP Client Pool
+# Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
-AI_PARSE_INVENTORY, BOT_TOKEN = range(2)
+STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
 
 
 # -------------------------------------------------------------------
-# Helper: Safe Datetime Parser
+# Safe UTC Datetime Parser Helper
 # -------------------------------------------------------------------
 def parse_dt(dt_val) -> datetime:
     if isinstance(dt_val, datetime):
@@ -74,7 +74,7 @@ def parse_dt(dt_val) -> datetime:
 
 
 # -------------------------------------------------------------------
-# Root Health Check
+# Root Health Check (Supports GET and HEAD for UptimeRobot)
 # -------------------------------------------------------------------
 @app.get("/")
 @app.head("/")
@@ -83,7 +83,7 @@ async def root_health_check():
 
 
 # -------------------------------------------------------------------
-# Subscription & Visitor Core
+# Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
 # -------------------------------------------------------------------
 async def get_or_create_user_subscription(user_id: int) -> dict:
     now = datetime.now(timezone.utc)
@@ -103,7 +103,11 @@ async def get_or_create_user_subscription(user_id: int) -> dict:
             logger.error(f"Subscription fetch error: {e}")
 
     default_expiry = now + timedelta(days=3)
-    default_sub = {"trial_expires": default_expiry, "credits_remaining": 50, "is_pro": False}
+    default_sub = {
+        "trial_expires": default_expiry,
+        "credits_remaining": 50,
+        "is_pro": False
+    }
     
     if supabase:
         try:
@@ -132,7 +136,7 @@ async def verify_active_access(user_id: int) -> bool:
             return True
     except Exception as e:
         logger.error(f"Access verification error: {e}")
-        return True  # Fail-open to avoid locking out legitimate users on DB hiccups
+        return True
     return False
 
 
@@ -162,13 +166,13 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Dynamic Payout Load Balancer
+# Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
 # -------------------------------------------------------------------
 async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
     now = datetime.now(timezone.utc)
     twenty_four_hours_ago = now - timedelta(hours=24)
-    telebirr_24h_total = 0.0
     
+    telebirr_24h_total = 0.0
     if supabase:
         try:
             rev_res = await asyncio.to_thread(
@@ -176,10 +180,12 @@ async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
             )
             if rev_res.data:
                 for tx in rev_res.data:
-                    if tx.get("channel") == "TELEBIRR" and tx.get("created_at") and parse_dt(tx["created_at"]) >= twenty_four_hours_ago:
-                        telebirr_24h_total += float(tx["amount_etb"])
+                    if tx.get("channel") == "TELEBIRR" and tx.get("created_at"):
+                        tx_date = parse_dt(tx["created_at"])
+                        if tx_date >= twenty_four_hours_ago:
+                            telebirr_24h_total += float(tx["amount_etb"])
         except Exception as e:
-            logger.error(f"Payout load balancer check error: {e}")
+            logger.error(f"Telebirr 24h cap check error: {e}")
 
     SAFE_TELEBIRR_CAP = 20000.0 
     whole_birr_amount = random.randint(3500, 3600)
@@ -191,26 +197,34 @@ async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
 
 
 # -------------------------------------------------------------------
-# Master Bot Handlers
+# Telegram Master Bot Handlers & Commands
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    await log_visitor(user.id)
-    sub_data = await get_or_create_user_subscription(user.id)
-    has_access = await verify_active_access(user.id)
+    user_id = user.id
+    await log_visitor(user_id)
+    
+    sub_data = await get_or_create_user_subscription(user_id)
+    has_access = await verify_active_access(user_id)
     expires_str = parse_dt(sub_data["trial_expires"]).strftime("%Y-%m-%d %H:%M UTC")
     
-    status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ" if sub_data["is_pro"] else (
-        f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n• የሚያበቃበት ጊዜ: {expires_str}\n• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
-        if has_access else "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ ፕሮ አባልነት ያሻሽሉ።"
-    )
+    if sub_data["is_pro"]:
+        status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
+    elif has_access:
+        status_text = (
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
+            f"• የሚያበቃበት ጊዜ: {expires_str}\n"
+            f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
+        )
+    else:
+        status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
         f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
         f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /register - የ AI ቦትዎን በራሱ በ AI እንዲዋቀር ማድረግ\n"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
         "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
         "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
         "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
@@ -218,7 +232,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ", callback_data="buy_pro")],
+        [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (በብር)", callback_data="buy_pro")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
@@ -238,7 +252,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lambda: supabase.table("stores").select("store_name", "bot_token", "ui_theme").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
-            await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። /register በመጠቀም የመጀመሪያውን ቦት ይፍጠሩ!")
+            await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
         bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -247,8 +261,8 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             bots_list_text += (
                 f"{idx}. {store['store_name']}\n"
-                f"• ቶከን: {masked_token}\n"
-                f"• የቦት ዘይቤ (Theme): {store.get('ui_theme', 'energetic').capitalize()}\n"
+                f"• ቶከን ቁልፍ: {masked_token}\n"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n"
                 f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
         await update.effective_message.reply_text(bots_list_text)
@@ -393,58 +407,94 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------------------------
-# Onboarding Conversation (AI Raw Data Parser + Tone Detection)
+# Onboarding Conversation Handlers
 # -------------------------------------------------------------------
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not msg:
-        return AI_PARSE_INVENTORY
-    await msg.reply_text(
-        "🤖 Nexa AI ስማርት ቦት ፈጣሪ\n\n"
-        "እባክዎ ስለ ንግድዎ፣ አገልግሎትዎ ወይም ሪል እስቴት ንብረትዎ **የተዝረከረከ ወይም ያልተዋቀረ ጽሑፍ (Raw Text)** እዚህ ይለጥፉ።\n\n"
-        "AI-ው በራሱ የንግድ ስሙን አውጥቶ፣ መደብሩን አዋቅሮ እና የቦቱን ስሜት/ዘይቤ (Tone) ወስኖ ቦትዎን ያዘጋጃል!"
+    message = update.effective_message
+    if not message:
+        return STORE_NAME
+    await message.reply_text(
+        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።\n\n"
+        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: አዲስ ሪል እስቴት)"
     )
-    return AI_PARSE_INVENTORY
+    return STORE_NAME
 
 
-async def receive_and_ai_parse_raw_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw_text = update.effective_message.text
-    await update.effective_message.reply_text("⏳ AI-ው መረጃውን በመተንተን፣ ካታሎጉን በማዋቀር እና የቦቱን ዘይቤ በመምረጥ ላይ ይገኛል...")
-
-    parsed_store_name = "My Smart Store"
-    structured_inventory = raw_text
-    ui_theme = "energetic"
-
-    if async_groq_client:
-        try:
-            prompt = (
-                f"Analyze this raw business or real estate catalog data:\n{raw_text}\n\n"
-                f"Extract and structure cleanly. Determine tone/theme ('energetic', 'friendly', 'executive', or 'sales'). "
-                f"Return strictly valid JSON format:\n"
-                f'{{"store_name": "Extracted Store Name", "structured_catalog": "Clean structured listings", "ui_theme": "energetic/friendly/executive/sales"}}'
-            )
-            response = await async_groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                response_format={"type": "json_object"},
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            data = json.loads(response.choices[0].message.content)
-            parsed_store_name = data.get("store_name", parsed_store_name)
-            structured_inventory = data.get("structured_catalog", raw_text)
-            ui_theme = data.get("ui_theme", "energetic")
-        except Exception as e:
-            logger.error(f"AI Parse Error: {e}")
-
-    context.user_data["store_name"] = parsed_store_name
-    context.user_data["inventory_data"] = structured_inventory
-    context.user_data["ui_theme"] = ui_theme
-
+async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["store_name"] = update.effective_message.text
+    
+    keyboard = [
+        [InlineKeyboardButton("🛍️ ቸርቻሪ እና እቃዎች", callback_data="ind_retail")],
+        [InlineKeyboardButton("🏋️ ጤና እና የአካል ብቃት", callback_data="ind_fitness")],
+        [InlineKeyboardButton("🏠 የቤት እና ንብረት ሽያጭ", callback_data="ind_realestate")],
+        [InlineKeyboardButton("🩺 ህክምና እና ክሊኒክ", callback_data="ind_clinic")],
+        [InlineKeyboardButton("🤝 ኤጀንሲ እና ደላላ", callback_data="ind_broker")],
+        [InlineKeyboardButton("⚙️ አጠቃላይ አገልግሎቶች", callback_data="ind_general")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.effective_message.reply_text(
-        f"✅ መረጃው በተሳካ ሁኔታ ተተንትኗል!\n\n"
-        f"• የንግድ ስም: **{parsed_store_name}**\n"
-        f"• የተመረጠው የቦት ዘይቤ: **{ui_theme.capitalize()}**\n\n"
-        f"አሁን የመጨረሻው ደረጃ:\nወደ Telegram @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ የሰጡዎትን **የቦት ቶከን (Bot Token)** እዚህ ይለጥፉ:"
+        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
+        "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
+        reply_markup=reply_markup
+    )
+    return INDUSTRY
+
+
+async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chosen_industry = "general"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        chosen_industry = query.data.replace("ind_", "")
+        target_message = query.edit_message_text
+    else:
+        chosen_industry = update.effective_message.text.lower()
+        target_message = update.effective_message.reply_text
+
+    context.user_data["industry"] = chosen_industry
+
+    keyboard = [
+        [InlineKeyboardButton("💎 ቪአይፒ ኤክስክሉቲቭ", callback_data="theme_executive")],
+        [InlineKeyboardButton("⚡ ከፍተኛ ሽያጭ አቅጣጫ", callback_data="theme_sales")],
+        [InlineKeyboardButton("🌿 ወዳጃዊ አማካሪ", callback_data="theme_friendly")],
+        [InlineKeyboardButton("🎯 ቀጥተኛ እና አጭር", callback_data="theme_minimalist")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await target_message(
+        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
+        "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
+        reply_markup=reply_markup
+    )
+    return UI_THEME
+
+
+async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chosen_theme = "executive"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        chosen_theme = query.data.replace("theme_", "")
+        target_message = query.edit_message_text
+    else:
+        chosen_theme = "executive"
+        target_message = update.effective_message.reply_text
+
+    context.user_data["ui_theme"] = chosen_theme
+    
+    await target_message(
+        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
+    )
+    return INVENTORY
+
+
+async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["inventory_data"] = update.effective_message.text
+    await update.effective_message.reply_text(
+        "ሊጠናቀቅ ነው።!\n\n"
+        "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
 
@@ -454,7 +504,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_telegram_id = str(update.effective_user.id)
     store_name = context.user_data.get("store_name", "My Store")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
-    ui_theme = context.user_data.get("ui_theme", "energetic")
+    ui_theme = context.user_data.get("ui_theme", "executive")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     
@@ -489,8 +539,9 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
         f"• የንግድ ስም: {store_name}\n"
+        f"• የቦት ዘይቤ: {ui_theme.capitalize()}\n"
         f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
-        "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) እንደ ንግድዎ ባህሪ በታቀደው የጥራት ስሜት (Tone) ምላሽ ይሰጣል።"
+        "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) በመረጡት ቋንቋ እና ዘይቤ ምላሽ ይሰል።"
     )
     return ConversationHandler.END
 
@@ -653,7 +704,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # -------------------------------------------------------------------
-# FastAPI Webhooks & Tenant Bot Engine (Fixed & Enhanced)
+# FastAPI Webhooks & Tenant Bot Engine
 # -------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
@@ -700,7 +751,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
 
     data = await request.json()
     
-    # Handle Callback Queries (Language selection)
     if "callback_query" in data:
         cq = data["callback_query"]
         chat_id = cq["message"]["chat"]["id"]
@@ -728,7 +778,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
-    from_user = message.get("from", {})
     
     if not chat_id or not user_text:
         return {"ok": True}
@@ -748,7 +797,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         return {"ok": True}
 
-    # Log visitor safely
     if supabase:
         try:
             await asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
@@ -757,7 +805,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         except Exception:
             pass
 
-    # Handle /start with dynamic theme & tone greeting
     if user_text == "/start":
         if supabase:
             try:
@@ -767,12 +814,13 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             except Exception:
                 pass
 
-        ui_theme = store.get("ui_theme", "energetic")
+        ui_theme = store.get("ui_theme", "executive")
         theme_intros = {
             "energetic": "🚀 በደስታ ተቀብለናል! ዛሬ ምን እንድንሰራሎት ይፈልጋሉ?",
             "friendly": "👋 ሰላም! እንኳን ደህና መጡ። በምን እንተባበር?",
             "executive": "💼 እንኳን ወደ ቪአይፒ የውሳኔ ማዕከል በደህና መጡ።",
-            "sales": "🎯 ምርጥ ምርጫዎችን እና ቅናሾችን ለማግኘት ዝግጁ ነን!"
+            "sales": "🎯 ምርጥ ምርጫዎችን እና ቅናሾችን ለማግኘት ዝግጁ ነን!",
+            "minimalist": "🎯 ሰላም! በምን ልረዳዎ እችላለሁ?"
         }
 
         keyboard = [
@@ -787,11 +835,10 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
             "chat_id": chat_id,
-            "text": "🛡️ **የደህንነት እና የታማኝነት ማስታወሻ**: የእርስዎ ውይይቶች እና መረጃዎች ሙሉ በሙሉ የተመሰጠሩ (Encrypted) እና ደህንነታቸው የተጠበቁ ናቸው። ቦቱ የንግድ ችግሮችዎን ለመፍታት የተዘጋጀ ነው።"
+            "text": "🛡️ **የደህንነት እና የታማኝነት ማስታወሻ**: የእርስዎ ውይይቶች እና መረጃዎች ሙሉ በሙሉ የተመሰጠሩ (Encrypted) እና ደህንነታቸው የተጠበቁ ናቸው።"
         })
         return {"ok": True}
 
-    # Retrieve customer language and history
     customer_lang = "amharic"
     if supabase:
         try:
@@ -814,7 +861,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "chat_id": chat_id, "user_text": user_text, "bot_token": bot_token,
         "store_name": store.get("store_name", "Our Business"), "inventory_data": store.get("inventory_data", ""),
         "owner_telegram_id": store.get("owner_telegram_id"), "customer_lang": customer_lang,
-        "ui_theme": store.get("ui_theme", "energetic"), "history_messages": history_messages
+        "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages
     }
     
     return await store_chat_webhook(payload)
@@ -829,7 +876,7 @@ async def store_chat_webhook(payload: dict):
     inventory_data = payload.get("inventory_data", "")
     owner_telegram_id = payload.get("owner_telegram_id")
     customer_lang = payload.get("customer_lang", "amharic")
-    ui_theme = payload.get("ui_theme", "energetic")
+    ui_theme = payload.get("ui_theme", "executive")
     history_messages = payload.get("history_messages", [])
 
     if owner_telegram_id:
@@ -861,12 +908,13 @@ async def store_chat_webhook(payload: dict):
         "energetic": "Be highly energetic, exciting, friendly, and action-oriented.",
         "friendly": "Be warm, welcoming, approachable, and helpful.",
         "executive": "Be a professional executive VIP concierge, polished and authoritative.",
-        "sales": "Be conversion-focused, direct, highlighting value and urgency."
+        "sales": "Be conversion-focused, direct, highlighting value and urgency.",
+        "minimalist": "Be direct, concise, and straight to the point."
     }
 
     system_prompt = f"""
     You are an AI assistant for {store_name}. 
-    Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['energetic'])}
+    Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
     Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
     Goal & Guidelines:
@@ -923,7 +971,16 @@ conv_handler = ConversationHandler(
         CallbackQueryHandler(register_start, pattern="^start_register$")
     ],
     states={
-        AI_PARSE_INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_and_ai_parse_raw_data)],
+        STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
+        INDUSTRY: [
+            CallbackQueryHandler(receive_industry, pattern="^ind_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
+        ],
+        UI_THEME: [
+            CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
+        ],
+        INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
     },
     fallbacks=[CommandHandler("cancel", cancel_registration)],
