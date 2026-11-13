@@ -613,7 +613,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
             response = await async_groq_client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3.8-27b",
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -684,7 +684,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 response_format={"type": "json_object"},
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
                 temperature=0.3
@@ -912,7 +912,7 @@ async def store_chat_webhook(payload: dict):
             messages.append({"role": "user", "content": user_text})
 
             completion = await async_groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 temperature=0.7,
                 max_tokens=600
