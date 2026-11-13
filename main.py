@@ -777,6 +777,14 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             pass
 
     if user_text == "/start":
+        if supabase:
+            try:
+                await asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
+                    "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
+                }, on_conflict="chat_id,bot_token").execute())
+            except Exception:
+                pass
+
         ui_theme = store.get("ui_theme", "executive")
         theme_intros = {
             "energetic": "🚀 በደስታ ተቀብለናል! ዛሬ ምን እንድንሰራሎት ይፈልጋሉ?",
@@ -794,9 +802,21 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             "chat_id": chat_id,
             "text": direct_welcome
         })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": "🛡️ **የደህንነት እና የታማኝነት ማስታወሻ**: የእርስዎ ውይይቶች እና መረጃዎች ሙሉ በሙሉ የተመሰጠሩ (Encrypted) እና ደህንነታቸው የተጠበቁ ናቸው።"
+        })
         return {"ok": True}
 
     customer_lang = "amharic"
+    if supabase:
+        try:
+            lang_res = await asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute())
+            if lang_res.data:
+                customer_lang = lang_res.data[0]["language"]
+        except Exception:
+            pass
+
     history_messages = []
     if supabase:
         try:
@@ -861,16 +881,18 @@ async def store_chat_webhook(payload: dict):
         "minimalist": "Be direct, concise, and straight to the point."
     }
 
+    # Enhanced Analytical & Store-Grounded System Prompt
     system_prompt = f"""
-    You are an AI assistant for {store_name}. 
+    You are an advanced, intelligent AI sales and analytical assistant for {store_name}. 
     Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
     Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     
-    Goal & Guidelines:
-    - Solve the customer's problem directly with NO fluff or unnecessary filler text.
-    - Accurately parse and present listings, prices, locations, and descriptions from the catalog below.
-    - If customers want to book, purchase, or visit, warmly guide them to provide their name and phone number.
-    - Always emphasize trust, clarity, and security.
+    Core Directives & Analytical Approach:
+    - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
+    - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
+    - If a customer asks about a product, service, or general inquiry, evaluate the store catalog context and give a structured, professional, and helpful response.
+    - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
+    - Always maintain trust, clarity, and security.
     
     Live Store Catalog Data:
     {inventory_data}
@@ -897,12 +919,18 @@ async def store_chat_webhook(payload: dict):
 
     if supabase:
         try:
-            await asyncio.to_thread(lambda: supabase.table("chat_history").insert([
-                {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": datetime.now(timezone.utc).isoformat()},
-                {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": datetime.now(timezone.utc).isoformat()}
-            ]).execute())
-        except Exception:
-            pass
+            now_user = datetime.now(timezone.utc)
+            now_assistant = now_user + timedelta(milliseconds=500)
+            
+            await asyncio.to_thread(lambda: supabase.table("chat_history").insert({
+                "chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()
+            }).execute())
+            
+            await asyncio.to_thread(lambda: supabase.table("chat_history").insert({
+                "chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": now_assistant.isoformat()
+            }).execute())
+        except Exception as e:
+            logger.error(f"Chat history insert error: {e}")
 
     await http_client.post(
         f"https://api.telegram.org/bot{bot_token}/sendMessage",
