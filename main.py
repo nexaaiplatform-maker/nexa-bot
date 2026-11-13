@@ -712,7 +712,7 @@ async def startup_event():
     http_client = httpx.AsyncClient(timeout=10.0)
     await telegram_app.initialize()
     await telegram_app.start() 
-    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
+    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
 
     if supabase:
         try:
