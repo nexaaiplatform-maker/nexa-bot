@@ -511,7 +511,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         resp = await http_client.post(
             f"https://api.telegram.org/bot{bot_token}/setWebhook", 
-            json={"url": tenant_webhook_url, "secret_token": TELEGRAM_WEBHOOK_SECRET}
+            json={"url": tenant_webhook_url}
         )
         if not resp.json().get("ok"):
             await update.effective_message.reply_text("⚠️ ያስገቡት የቦት ቶከን ልክ አይደለም። እባክዎ ትክክለኛ ቶከን እንደገና ይላኩ:")
@@ -719,7 +719,7 @@ async def startup_event():
             stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("bot_token").execute())
             if stores_res.data:
                 tasks = [
-                    http_client.post(f"https://api.telegram.org/bot{s['bot_token']}/setWebhook", json={"url": f"{RENDER_EXTERNAL_URL}/tenant-webhook/{s['bot_token']}", "secret_token": TELEGRAM_WEBHOOK_SECRET})
+                    http_client.post(f"https://api.telegram.org/bot{s['bot_token']}/setWebhook", json={"url": f"{RENDER_EXTERNAL_URL}/tenant-webhook/{s['bot_token']}"})
                     for s in stores_res.data if s.get("bot_token")
                 ]
                 if tasks:
@@ -737,8 +737,6 @@ async def shutdown_event():
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
-    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     update = Update.de_json(await request.json(), telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
@@ -746,9 +744,6 @@ async def telegram_webhook(request: Request):
 
 @app.post("/tenant-webhook/{bot_token}")
 async def tenant_bot_webhook(bot_token: str, request: Request):
-    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
     data = await request.json()
     
     if "callback_query" in data:
