@@ -44,9 +44,6 @@ TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
 # 3-Tier Feature & Pricing Matrix
-# Tier 1: Starter (1,000 ETB) — Core AI Assistant + Text Catalog + Photo Support + Basic Leads
-# Tier 2: Business (2,500 ETB) — Advanced AI + Photo Catalogs + Detailed Lead Tracking + Custom Themes
-# Tier 3: Enterprise (5,000 ETB) — Unlimited AI + Full Photo & Video Streaming Support + VIP Concierge + Advanced Analytics
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -326,7 +323,6 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store fetch error: {e}")
 
-    # Interactive 3-Tier Subscription Selector with 100% full feature retention
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="upgrade_tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="upgrade_tier_2")],
