@@ -43,11 +43,35 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
-# 3-Tier Pricing Dictionary
-TIER_PRICES = {
-    1: {"name": "Tier 1 (Starter)", "price": 1000},
-    2: {"name": "Tier 2 (Business)", "price": 2500},
-    3: {"name": "Tier 3 (Enterprise)", "price": 5000},
+# 3-Tier Feature & Pricing Matrix
+# Tier 1: Starter (1,000 ETB) — Core AI Assistant + Text Catalog + Photo Support + Basic Leads
+# Tier 2: Business (2,500 ETB) — Advanced AI + Photo Catalogs + Detailed Lead Tracking + Custom Themes
+# Tier 3: Enterprise (5,000 ETB) — Unlimited AI + Full Photo & Video Streaming Support + VIP Concierge + Advanced Analytics
+TIER_CONFIG = {
+    1: {
+        "name": "Tier 1 (Starter)",
+        "price": 1000,
+        "features": "Core AI Sales, Text Catalog, Photo Support, Basic Leads",
+        "allows_photos": True,
+        "allows_videos": False,
+        "credits": 500
+    },
+    2: {
+        "name": "Tier 2 (Business Pro)",
+        "price": 2500,
+        "features": "Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes",
+        "allows_photos": True,
+        "allows_videos": False,
+        "credits": 2500
+    },
+    3: {
+        "name": "Tier 3 (Enterprise VIP)",
+        "price": 5000,
+        "features": "Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics",
+        "allows_photos": True,
+        "allows_videos": True,
+        "credits": 999999
+    },
 }
 
 # Initialize Clients with Fail-Safe Checks & Logging
@@ -209,7 +233,7 @@ async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, 
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands
+# Telegram Master Bot Handlers & Commands (Clean Enterprise UI)
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -224,23 +248,23 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
     elif has_access:
         status_text = (
-            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\\n"
-            f"• የሚያበቃበት ጊዜ: {expires_str}\\n"
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
+            f"• የሚያበቃበት ጊዜ: {expires_str}\n"
             f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
         )
     else:
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\\n\\n"
-        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።\\n\\n"
-        f"📊 የመለያዎ ሁኔታ:\\n{status_text}\\n\\n"
-        "🎯 ፈጣን መመሪያ:\\n"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\\n"
-        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\\n"
-        "3️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\\n"
-        "4️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\\n"
-        "5️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\\n"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
+        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።\n\n"
+        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
+        "🎯 ፈጣን መመሪያ:\n"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
+        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "3️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
+        "4️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "5️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
         "6️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
     )
     
@@ -269,18 +293,18 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\\n━━━━━━━━━━━━━━━━━━━━━━\\n\\n"
+        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for idx, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             tier_num = store.get("plan_tier", 1)
-            tier_name = TIER_PRICES.get(tier_num, TIER_PRICES[1])["name"]
+            tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
             bots_list_text += (
-                f"{idx}. {store['store_name']}\\n"
-                f"• ዕቅድ / ፕላን: {tier_name}\\n"
-                f"• ቶከን ቁልፍ: {masked_token}\\n"
-                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\\n"
-                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\\n\\n"
+                f"{idx}. {store['store_name']}\n"
+                f"• ዕቅድ / ፕላን: {tier_name}\n"
+                f"• ቶከን ቁልፍ: {masked_token}\n"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n"
+                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
             )
         await update.effective_message.reply_text(bots_list_text)
     except Exception as e:
@@ -304,7 +328,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Upgrade tier fetch error: {e}")
 
-    tier_info = TIER_PRICES.get(tier_num, TIER_PRICES[1])
+    tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
     exact_amount_etb = tier_info["price"]
     
     channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
@@ -326,15 +350,15 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Pending order save error: {e}")
     
     invoice_text = (
-        f"⭐ **ፕሮ አባልነት ማሻሻያ ({store_name})**\\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\\n"
-        f"• የተመረጠው ዕቅድ: {tier_info['name']}\\n"
-        f"• የክፍያ መጠን: {exact_amount_etb:,} ብር / ወር\\n"
-        f"• የደረሰኝ ቁጥር: {order_id}\\n"
-        f"• የክፍያ መንገድ: {channel_name}\\n"
-        f"• የሂሳብ ቁጥር: {masked_account}\\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\\n\\n"
-        f"🚨 መመሪያ:\\n1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb:,} ብር ያስተላልፉ።\\n2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
+        f"⭐ **ፕሮ አባልነት ማሻሻያ ({store_name})**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
+        f"• የክፍያ መጠን: {exact_amount_etb:,} ብር / ወር\n"
+        f"• የደረሰኝ ቁጥር: {order_id}\n"
+        f"• የክፍያ መንገድ: {channel_name}\n"
+        f"• የሂሳብ ቁጥር: {masked_account}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🚨 መመሪያ:\n1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb:,} ብር ያስተላልፉ።\n2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
     )
     keyboard = [
         [InlineKeyboardButton(f"📋 ሂሳብ ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
@@ -361,25 +385,27 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         store_name = store_res.data[0]["store_name"]
 
         leads_res = await asyncio.to_thread(
-            lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(30).execute()
+            lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute()
         )
 
         if not leads_res.data:
             await update.effective_message.reply_text(f"📭 እስካሁን ለ **{store_name}** የተመዘገቡ የደንበኛ Leads የሉም።", parse_mode="Markdown")
             return
 
-        lines = [f"📋 **የደንበኛ Leads & ጥያቄዎች — {store_name}**\\n━━━━━━━━━━━━━━━━━━━━━━\\n"]
+        lines = [f"📋 **የደንበኛ Leads & ጎብኚዎች ማጠቃለያ — {store_name}**\n━━━━━━━━━━━━━━━━━━━━━━\n"]
         for idx, lead in enumerate(leads_res.data, start=1):
             name = lead.get("visitor_name") or "ስም ያልታወቀ ጎብኚ"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
             interest = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
+            last_time = lead.get("updated_at", "")[:16].replace("T", " ")
             lines.append(
-                f"**{idx}. {name}**\\n"
-                f"   📞 ስልክ ቁጥር: `{phone}`\\n"
-                f"   💬 የጠየቀው/የፈለገው: _{interest}_\\n"
+                f"**{idx}. {name}**\n"
+                f"   📞 ስልክ ቁጥር: `{phone}`\n"
+                f"   💬 የጠየቀው/የፈለገው: _{interest}_\n"
+                f"   ⏱️ የመጨረሻ ጊዜ: {last_time}\n"
             )
 
-        await update.effective_message.reply_text("\\n".join(lines), parse_mode="Markdown")
+        await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         await update.effective_message.reply_text(f"Leads ማምጣት አልተቻለም: {str(e)}")
 
@@ -409,12 +435,12 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Summary fetch error: {e}")
 
-    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር\\n" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
+    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር\n" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
     summary_text = (
-        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\\n━━━━━━━━━━━━━━━━━━━━━━\\n"
-        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\\n"
-        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች\\n"
-        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\\n━━━━━━━━━━━━━━━━━━━━━━\\n\\n🏆 ከፍተኛ ከፋዮች:\\n{top_payers_text}"
+        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\n"
+        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች\n"
+        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n🏆 ከፍተኛ ከፋዮች:\n{top_payers_text}"
     )
     await update.effective_message.reply_text(summary_text)
 
@@ -452,10 +478,10 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)\\n━━━━━━━━━━━━━━━━━━━━━━\\n"
-        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\\n"
-        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\\n"
-        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\\n━━━━━━━━━━━━━━━━━━━━━━\\n\\n💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
+        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
+        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
+        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
     )
     await update.effective_message.reply_text(weekly_text)
 
@@ -466,7 +492,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.effective_message.reply_text(
-            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:\\n\\n/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።\\nምሳሌ:\\n/update ጫማ - 2,800 ብር"
+            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:\n\n/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።\nምሳሌ:\n/update ጫማ - 2,800 ብር"
         )
         return
 
@@ -491,34 +517,49 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not caption.startswith("/addmedia"):
         return
 
+    # Check store tier permissions
+    tier_num = 1
+    if supabase:
+        try:
+            store_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token, plan_tier").eq("owner_telegram_id", owner_id).execute()
+            )
+            if store_res.data:
+                tier_num = store_res.data[0].get("plan_tier", 1)
+                bot_token = store_res.data[0]["bot_token"]
+        except Exception as e:
+            logger.error(f"Tier check error: {e}")
+            await message.reply_text("❌ መደብርዎን ማረጋገጥ አልተቻለም።")
+            return
+
+    tier_limits = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
+
     parts = caption.split(maxsplit=2)
     if len(parts) < 2:
-        await message.reply_text("⚠️ አጠቃቀም: ፎቶ ወይም ቪዲዮ ከዚህ መግለጫ ጋር ይላኩ:\\n`/addmedia tag_id [መግለጫ]`", parse_mode="Markdown")
+        await message.reply_text("⚠️ አጠቃቀም: ፎቶ ወይም ቪዲዮ ከዚህ መግለጫ ጋር ይላኩ:\n`/addmedia tag_id [መግለጫ]`", parse_mode="Markdown")
         return
 
     item_tag = parts[1].lower().strip()
     desc = parts[2] if len(parts) > 2 else ""
 
+    if message.photo:
+        if not tier_limits["allows_photos"]:
+            await message.reply_text("⚠️ የርስዎ የዕቅድ ደረጃ ፎቶዎችን መጫን አያስችለውም። እባክዎ /upgrade በመጠቀም ያሻሽሉ።")
+            return
+        file_id = message.photo[-1].file_id
+        media_type = "photo"
+    elif message.video:
+        if not tier_limits["allows_videos"]:
+            await message.reply_text("🔒 **የዕቅድ ገደብ (Tier Limit)**\nየቪዲዮ ማስተላለፍ አገልግሎት የሚገኘው ለ **Tier 3 (Enterprise)** አባላት ብቻ ነው። እባክዎ /upgrade በመጠቀም ወደ  Tier 3 ያሻሽሉ።", parse_mode="Markdown")
+            return
+        file_id = message.video.file_id
+        media_type = "video"
+    else:
+        await message.reply_text("⚠️ እባክዎ ትክክለኛ ፎቶ ወይም ቪዲዮ ያያይዙ።")
+        return
+
     if supabase:
         try:
-            store_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", owner_id).execute()
-            )
-            if not store_res.data:
-                await message.reply_text("❌ እባክዎ መጀመሪያ /register በመጠቀም መደብር ይፍጠሩ።")
-                return
-            bot_token = store_res.data[0]["bot_token"]
-
-            if message.photo:
-                file_id = message.photo[-1].file_id
-                media_type = "photo"
-            elif message.video:
-                file_id = message.video.file_id
-                media_type = "video"
-            else:
-                await message.reply_text("⚠️ እባክዎ ትክክለኛ ፎቶ ወይም ቪዲዮ ያያይዙ።")
-                return
-
             await asyncio.to_thread(
                 lambda: supabase.table("property_media").insert({
                     "bot_token": bot_token,
@@ -539,8 +580,8 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         return STORE_NAME
     await message.reply_text(
-        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\\n\\n"
-        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።\\n\\n"
+        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።\n\n"
         "እርምጃ 1 ከ 5: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: አዲስ ሪል እስቴት)"
     )
     return STORE_NAME
@@ -560,7 +601,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.effective_message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\\n\\n"
+        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
         "እርምጃ 2 ከ 5: ዋናውን የስራ ዘርፍ ይምረጡ:",
         reply_markup=reply_markup
     )
@@ -589,7 +630,7 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\\n\\n"
+        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
         "እርምጃ 3 ከ 5: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
         reply_markup=reply_markup
     )
@@ -610,15 +651,19 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ui_theme"] = chosen_theme
     
     keyboard = [
-        [InlineKeyboardButton("🥉 tier 1 (1,000 ብር / ወር)", callback_data="tier_1")],
-        [InlineKeyboardButton("🥈 tier 2 (2,500 ብር / ወር)", callback_data="tier_2")],
-        [InlineKeyboardButton("🥇 tier 3 (5,000 ብር / ወር)", callback_data="tier_3")]
+        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_1")],
+        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_2")],
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_3")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        "እርምጃ 4 ከ 5: የሚፈልጉትን የክፍያ እና የባሪዮች ደረጃ (Tier) ይምረጡ:",
-        reply_markup=reply_markup
+        "እርምጃ 4 ከ 5: የሚፈልጉትን የባሪዮች ደረጃ (Tier) ይምረጡ:\n"
+        "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
+        "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
+        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
     return PLAN_TIER
 
@@ -635,10 +680,10 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_message = update.effective_message.reply_text
 
     context.user_data["plan_tier"] = tier_num
-    tier_info = TIER_PRICES.get(tier_num, TIER_PRICES[1])
+    tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
 
     await target_message(
-        f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር)\\n\\n"
+        f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር)\n\n"
         "እርምጃ 5 ከ 5: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
     )
     return INVENTORY
@@ -647,7 +692,7 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.effective_message.text
     await update.effective_message.reply_text(
-        "ሊጠናቀቅ ነው።!\\n\\n"
+        "ሊጠናቀቅ ነው።!\n\n"
         "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -692,13 +737,13 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(e)}")
             return BOT_TOKEN
 
-    tier_name = TIER_PRICES.get(plan_tier, TIER_PRICES[1])["name"]
+    tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     await update.effective_message.reply_text(
-        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\\n\\n"
-        f"• የንግድ ስም: {store_name}\\n"
-        f"• የተመረጠው ዕቅድ: {tier_name}\\n"
-        f"• የቦት ዘይቤ: {ui_theme.capitalize()}\\n"
-        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\\n\\n"
+        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
+        f"• የንግድ ስም: {store_name}\n"
+        f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
+        f"• ችሎታዎች: {tier_info['features']}\n"
+        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
         "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) ቀጥተኛ ውይይት ይጀምራሉ።"
     )
     return ConversationHandler.END
@@ -760,9 +805,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if async_groq_client:
         try:
             prompt = (
-                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\\n"
-                f"1. Transaction Reference ID or Confirmation Code (string)\\n"
-                f"2. Total Amount in ETB transferred (number or string without commas)\\n"
+                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
+                f"1. Transaction Reference ID or Confirmation Code (string)\n"
+                f"2. Total Amount in ETB transferred (number or string without commas)\n"
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
@@ -809,7 +854,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
-        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\\n• የግብይት መለያ: {ref_id}")
+        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n• የግብይት መለያ: {ref_id}")
     else:
         if ADMIN_TELEGRAM_ID:
             try:
@@ -829,7 +874,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        'Return strictly valid JSON: {\\"intent\\": \\"category\\", \\"reply\\": \\"helpful response\\"}'
+        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ?"}
     if async_groq_client:
@@ -931,7 +976,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                 "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
             }, on_conflict="bot_token,chat_id").execute())
 
-            phone_match = re.search(r"(\\+251[79]\\d{8}|0[79]\\d{8})", user_text.replace(" ", ""))
+            phone_match = re.search(r"(\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
             phone_number = phone_match.group(0) if phone_match else None
             summary_snippet = user_text[:120] + ("..." if len(user_text) > 120 else "")
 
@@ -970,7 +1015,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         }
 
         direct_welcome = (
-            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\\n\\n"
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
@@ -1011,7 +1056,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "store_name": store.get("store_name", "Our Business"), "inventory_data": store.get("inventory_data", ""),
         "owner_telegram_id": store.get("owner_telegram_id"), "customer_lang": customer_lang,
         "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages,
-        "available_tags": available_tags
+        "available_tags": available_tags, "plan_tier": store.get("plan_tier", 1)
     }
     
     return await store_chat_webhook(payload)
@@ -1029,6 +1074,7 @@ async def store_chat_webhook(payload: dict):
     ui_theme = payload.get("ui_theme", "executive")
     history_messages = payload.get("history_messages", [])
     available_tags = payload.get("available_tags", [])
+    plan_tier = payload.get("plan_tier", 1)
 
     if owner_telegram_id:
         try:
@@ -1063,17 +1109,19 @@ async def store_chat_webhook(payload: dict):
         "minimalist": "Be direct, concise, and straight to the point."
     }
 
+    tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     tags_str = ", ".join(available_tags) if available_tags else "None"
 
     system_prompt = f"""
     You are an advanced, intelligent AI sales and analytical assistant for {store_name}. 
     Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
     Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
+    Store Plan Tier: {tier_capabilities['name']} ({tier_capabilities['features']})
     
     Core Directives & Analytical Approach:
     - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
     - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
-    - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response.
+    - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
     - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
     
     Available Media Tags: {tags_str}
@@ -1101,8 +1149,8 @@ async def store_chat_webhook(payload: dict):
             logger.error(f"Groq Chat Error: {e}")
             ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
-    tag_match = re.search(r"\\[SEND_MEDIA:([a-zA-Z0-9_\\-]+)\\]", ai_reply)
-    clean_ai_reply = re.sub(r"\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\]", "", ai_reply).strip()
+    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\\-]+)\\\]", ai_reply)
+    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
 
     if supabase:
         try:
@@ -1141,10 +1189,16 @@ async def store_chat_webhook(payload: dict):
                             json={"chat_id": chat_id, "photo": file_id, "caption": caption}
                         )
                     elif media_type == "video":
-                        await http_client.post(
-                            f"https://api.telegram.org/bot{bot_token}/sendVideo",
-                            json={"chat_id": chat_id, "video": file_id, "caption": caption}
-                        )
+                        if tier_capabilities["allows_videos"]:
+                            await http_client.post(
+                                f"https://api.telegram.org/bot{bot_token}/sendVideo",
+                                json={"chat_id": chat_id, "video": file_id, "caption": caption}
+                            )
+                        else:
+                            await http_client.post(
+                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                                json={"chat_id": chat_id, "text": "🔒 ቪዲዮዎችን ማየት የሚቻለው ለ Tier 3 (Enterprise) አባላት ብቻ ነው። እባክዎ መደብር ባለቤቱን ያነጋግሩ።"}
+                            )
         except Exception as e:
             logger.error(f"Media dispatch error: {e}")
 
