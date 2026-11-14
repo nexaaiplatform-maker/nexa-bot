@@ -770,16 +770,17 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"✅ Nexa እና ሁሉም የተገናኙ ቦቶች በትክክል እየሰሩ መሆናቸው ተረጋግጧል።"
         )
-    except Exception as e:
-        logger.error(f"System audit error: {e}")
-        return f"⚠️ የፍተሻ ስህተት አጋጥሟል: {str(e)}"
+async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chosen_theme = "executive"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        chosen_theme = query.data.replace("theme_", "")
+        target_message = query.edit_message_text
+    else:
+        chosen_theme = "executive"
+        target_message = update.effective_message.reply_text
 
-
-async def audit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    owner_id = str(update.effective_user.id)
-    status_msg = await update.effective_message.reply_text("🔍 AI ሁሉንም ቦቶች፣ ዌብሁኮች እና ውይይቶች እየፈተሸ እና እያስተካከለ ነው...")
-    report = await run_ai_system_audit_and_heal(target_owner_id=owner_id)
-    await status_msg.edit_text(report, parse_mode="Markdown")
     context.user_data["ui_theme"] = chosen_theme
     
     keyboard = [
