@@ -324,48 +324,22 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store fetch error: {e}")
 
-    # Generate varied amounts (base + 0..100 ETB) for direct Telebirr USSD links
-    t1_amount = random.randint(1000, 1100)
-    t2_amount = random.randint(2500, 2600)
-    t3_amount = random.randint(5000, 5100)
-
-    # Save initial pending order so AI-OCR receipt verification works immediately after payment
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("pending_orders").upsert({
-                    "user_id": owner_id,
-                    "order_id": f"NEXA-SECURE-{random.randint(1000, 9999)}",
-                    "amount": str(t1_amount),
-                    "channel": "Telebirr Secure Gateway",
-                    "destination_code": "TELEBIRR",
-                    "status": "pending_payment"
-                }, on_conflict="user_id").execute()
-            )
-        except Exception as e:
-            logger.error(f"Pending order init error: {e}")
-
-    url_tier_1 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_amount}%23"
-    url_tier_2 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t2_amount}%23"
-    url_tier_3 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t3_amount}%23"
-
-    keyboard = [
-        [InlineKeyboardButton(f"🥉 Tier 1: Starter ({t1_amount:,} ብር / ወር)", url=url_tier_1)],
-        [InlineKeyboardButton(f"🥈 Tier 2: Business Pro ({t2_amount:,} ብር / ወር)", url=url_tier_2)],
-        [InlineKeyboardButton(f"🥇 Tier 3: Enterprise VIP ({t3_amount:,} ብር / ወር)", url=url_tier_3)],
-        [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን (Upload Receipt)", callback_data="upload_receipt")]
-    ]
-    
     tier_select_text = (
-        f"⭐ **የፕሮ አባልነት ዕቅዶች ({store_name})**\n"
+        f"⭐ **የፕሮ አባልነት ዕቅድ ይምረጡ ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• **Tier 1 (Starter)**: Core AI Sales, Text Catalog, Photo Support, Basic Leads\n"
-        f"• **Tier 2 (Business Pro)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
-        f"• **Tier 3 (Enterprise VIP)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
+        f"• **Tier 1 (Starter)**: 1,000 ብር / ወር — Core AI Sales, Text Catalog, Photo Support\n"
+        f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር — Advanced AI, Photo Catalogs, Lead Tracking\n"
+        f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር — Unlimited AI, Video Streaming, VIP Analytics\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💳 **የቴሌብር ስልክ ቁጥር:** `{TELEBIRR_ACCOUNT_MASKED}`\n\n"
-        f"ከታች ካሉት 3 ዕቅዶች አንዱን ሲጫኑ በቀጥታ ወደ ቴሌብር መደወያ (`*127*2*...#`) ይወስድዎታል። ክፍያውን እንደፈጸሙ ደረሰኙን (Screenshot) ይላኩ!"
+        f"💳 **የቴሌብር ቁጥር:** `{TELEBIRR_ACCOUNT_MASKED}`\n\n"
+        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ (Tier) ከታች በመጫን ቀጥተኛ የቴሌብር መክፈያ ሊንክ ያግኙ:"
     )
+    
+    keyboard = [
+        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር)", callback_data="tier_pay_1")],
+        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር)", callback_data="tier_pay_2")],
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር)", callback_data="tier_pay_3")]
+    ]
     
     if update.callback_query:
         try:
@@ -419,17 +393,16 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
     telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
 
     invoice_text = (
-        f"⭐ **ፕሮ አባልነት ማሻሻያ — {tier_info['name']} ({store_name})**\n"
+        f"⭐ **ክፍያ ማረጋገጫ — {tier_info['name']} ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** / ወር\n"
+        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** (Varied)\n"
         f"• የደረሰኝ ቁጥር: {order_id}\n"
-        f"• የክፍያ መንገድ: {channel_name}\n"
-        f"• የሂሳብ/ስልክ ቁጥር: `{masked_account}`\n"
+        f"• የቴሌብር ቁጥር: `{masked_account}`\n"
         f"• 🔗 [ቀጥተኛ የቴሌብር መክፈያ ሊንክ]({telebirr_ussd_url})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⚠️ **ማሳሰቢያ (Notice):**\n"
-        f"1. ከላይ ያለውን ሊንክ ወይም ከታች ያለውን ቁልፍ በመጫን ቁጥርዎ እና መጠኑ በራሱ እንዲሞላ ያድርጉ።\n"
+        f"1. ከላይ ያለውን ሊንክ ወይም ቁልፍ ሲጫኑ ስልክዎ ላይ `*127*2*{masked_account}*{exact_amount_etb}#` ተሞልቶ ይከፈታል።\n"
         f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
         f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
     )
@@ -441,7 +414,10 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
     ]
     
     if update.callback_query:
-        await update.callback_query.message.edit_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        try:
+            await update.callback_query.message.edit_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except Exception:
+            await update.callback_query.message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
