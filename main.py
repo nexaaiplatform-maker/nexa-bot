@@ -905,11 +905,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "buy_pro":
         await upgrade_command(update, context)
-    elif query.data == "upgrade_tier_1":
+    elif query.data in ["upgrade_tier_1", "tier_pay_1", "tier_1"]:
         await process_tier_upgrade_selection(update, context, 1)
-    elif query.data == "upgrade_tier_2":
+    elif query.data in ["upgrade_tier_2", "tier_pay_2", "tier_2"]:
         await process_tier_upgrade_selection(update, context, 2)
-    elif query.data == "upgrade_tier_3":
+    elif query.data in ["upgrade_tier_3", "tier_pay_3", "tier_3"]:
         await process_tier_upgrade_selection(update, context, 3)
     elif query.data == "view_summary":
         await summary_command(update, context)
