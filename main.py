@@ -248,10 +248,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif has_access:
         fomo_hook = ""
         if remaining_days <= 2:
-            fomo_hook = f"\n🔥 **FOMO ALERT:** የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ **{remaining_days} ቀን ብቻ** ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
+            fomo_hook = f"\n🔥 FOMO ALERT: የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ {remaining_days} ቀን ብቻ ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
         status_text = (
             f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
-            f"• የቀረው ጊዜ: **{remaining_days} ቀናት**\n"
+            f"• የቀረው ጊዜ: {remaining_days} ቀናት\n"
             f"• የሚያበቃበት ጊዜ: {trial_exp.strftime('%Y-%m-%d %H:%M UTC')}\n"
             f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}{fomo_hook}"
         )
@@ -259,11 +259,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🌟 **NEXA AI BOT ENGINE** 🤖\n"
+        f"🌟 NEXA AI BOT ENGINE 🤖\n"
         f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
-        f"💡 **ለምን ክፍያ መፈጸም ይኖርብዎታል?**\n"
-        f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ **Elite Pro Tiers** ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።\n\n"
-        f"📊 **የመለያዎ ሁኔታ:**\n{status_text}\n\n"
+        f"💡 ለምን ክፍያ መፈጸም ይኖርብዎታል?\n"
+        f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ Elite Pro Tiers ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።\n\n"
+        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
         "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
@@ -282,7 +282,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
-    await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
