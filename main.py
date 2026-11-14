@@ -315,23 +315,58 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     owner_id = str(user_id)
     
-    tier_num = 1
     store_name = "Nexa Store"
     if supabase:
         try:
             store_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("store_name, plan_tier").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
+                lambda: supabase.table("stores").select("store_name").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
             )
             if store_res.data:
                 store_name = store_res.data[0].get("store_name", "Nexa Store")
-                tier_num = int(store_res.data[0].get("plan_tier") or 1)
         except Exception as e:
-            logger.error(f"Upgrade tier fetch error: {e}")
+            logger.error(f"Store fetch error: {e}")
+
+    # Interactive 3-Tier Subscription Selector with 100% full feature retention
+    keyboard = [
+        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="upgrade_tier_1")],
+        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="upgrade_tier_2")],
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="upgrade_tier_3")]
+    ]
+    
+    tier_select_text = (
+        f"⭐ **የፕሮ አባልነት ዕቅድ ማሻሻያ ({store_name})**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Tier 1 (Starter - 1,000 ብር)**: Core AI Sales, Text Catalog, Photo Support, Basic Leads\n"
+        f"• **Tier 2 (Business Pro - 2,500 ብር)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
+        f"• **Tier 3 (Enterprise VIP - 5,000 ብር)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ (Tier) ከታች በመጫን ይምረጡ፡"
+    )
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def process_tier_upgrade_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, tier_num: int):
+    user_id = update.effective_user.id
+    owner_id = str(user_id)
+    
+    store_name = "Nexa Store"
+    if supabase:
+        try:
+            store_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("store_name").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
+            )
+            if store_res.data:
+                store_name = store_res.data[0].get("store_name", "Nexa Store")
+        except Exception as e:
+            logger.error(f"Store fetch error: {e}")
 
     tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
     base_price = tier_info["price"]
     
-    # 100 ብር ልዩነት ያለው ትክክለኛ የክፍያ መጠን በራስ-ሰር ማመንጨት (ለምሳሌ: 1000 - 1100 ብር)
     exact_amount_etb = random.randint(base_price, base_price + 100)
     
     channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
@@ -349,14 +384,16 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "status": "pending_payment"
                 }, on_conflict="user_id").execute()
             )
+            await asyncio.to_thread(
+                lambda: supabase.table("stores").update({"plan_tier": tier_num}).eq("owner_telegram_id", owner_id).execute()
+            )
         except Exception as e:
             logger.error(f"Pending order save error: {e}")
     
-    # መደበኛ የቴሌብር USSD ቀጥተኛ መክፈቻ ሊንክ (ስልኩ ላይ ቁጥር እና መጠን በራሱ ያስገባል)
     telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
 
     invoice_text = (
-        f"⭐ **ፕሮ አባልነት ማሻሻያ ({store_name})**\n"
+        f"⭐ **ፕሮ አባልነት ማሻሻያ — {tier_info['name']} ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
         f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** / ወር\n"
@@ -365,17 +402,21 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• የሂሳብ/ስልክ ቁጥር: `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⚠️ **ማሳሰቢያ (Notice):**\n"
-        f"1. ከታች ያለውን **'በቴሌብር በቀጥታ ለመክፈል'** የሚለውን ቁልፍ ይጫኑ (ቁጥርዎ እና መጠኑ በራሱ ይሞላል)።\n"
+        f"1. ቴሌብር ከሆነ ከታች ያለውን ቀጥተኛ ሊንክ በመጫን ቁጥርዎ እና መጠኑ በራሱ እንዲሞላ ያድርጉ።\n"
         f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
         f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል እዚህ ይጫኑ", url=telebirr_ussd_url)],
+        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል", url=telebirr_ussd_url)],
         [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
-    await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -385,40 +426,99 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        store_res = await asyncio.to_thread(
+        stores_res = await asyncio.to_thread(
             lambda: supabase.table("stores").select("bot_token, store_name").eq("owner_telegram_id", owner_id).execute()
         )
-        if not store_res.data:
+        if not stores_res.data:
             await update.effective_message.reply_text("❌ እስካሁን የተመዘገበ ቦት የለዎትም። ለመፍጠር /register ይጠቀሙ።")
             return
 
-        bot_token = store_res.data[0]["bot_token"]
-        store_name = store_res.data[0]["store_name"]
+        if len(stores_res.data) == 1:
+            await show_store_leads_and_analytics(update.effective_message, stores_res.data[0]["bot_token"], stores_res.data[0]["store_name"])
+        else:
+            keyboard = []
+            for store in stores_res.data:
+                keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']}", callback_data=f"select_lead_bot_{store['bot_token']}")])
+            
+            target_msg = update.callback_query.message if update.callback_query else update.effective_message
+            text_prompt = "📋 **የሊድስ እና ስታቲስቲክስ መቆጣጠሪያ**\n\nእባክዎ መረጃውን ማየት የሚፈልጉትን ቦት/መደብር ይምረጡ:"
+            
+            if update.callback_query:
+                await target_msg.edit_text(text_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            else:
+                await target_msg.reply_text(text_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    except Exception as e:
+        await update.effective_message.reply_text(f"Leads ማምጣት አልተቻለም: {str(e)}")
+
+
+async def show_store_leads_and_analytics(message_target, bot_token: str, store_name: str):
+    try:
+        vis_res = await asyncio.to_thread(
+            lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bot_token).execute()
+        )
+        total_bot_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
 
         leads_res = await asyncio.to_thread(
             lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute()
         )
+        leads_data = leads_res.data or []
 
-        if not leads_res.data:
-            await update.effective_message.reply_text(f"📭 እስካሁን ለ **{store_name}** የተመዘገቡ የደንበኛ Leads የሉም።", parse_mode="Markdown")
-            return
+        chat_res = await asyncio.to_thread(
+            lambda: supabase.table("chat_history").select("chat_id, role, content").eq("bot_token", bot_token).limit(200).execute()
+        )
+        chats = chat_res.data or []
 
-        lines = [f"📋 **የደንበኛ Leads & ጎብኚዎች ማጠቃለያ — {store_name}**\n━━━━━━━━━━━━━━━━━━━━━━\n"]
-        for idx, lead in enumerate(leads_res.data, start=1):
-            name = lead.get("visitor_name") or "ስም ያልታወቀ ጎብኚ"
+        high_intent_clients = set()
+        buying_keywords = ["buy", "order", "price", "ብር", "ግዛ", "ትዕዛዝ", "ዋጋ", "ፈልግ", "ክፍያ", "pay", "ፈልጌአለሁ", "እንዴት ልግዛ", "ፈለግሁ"]
+        for c in chats:
+            content_lower = c.get("content", "").lower()
+            if any(kw in content_lower for kw in buying_keywords):
+                high_intent_clients.add(str(c.get("chat_id")))
+
+        high_intent_count = len(high_intent_clients)
+
+        analytics_header = (
+            f"📊 **የስታቲስቲክስ እና ሊድስ ማጠቃለያ — {store_name}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• ጠቅላላ የቦት ጎብኚዎች: {total_bot_visitors} ተጠቃሚዎች\n"
+            f"• ንቁ የውይይት ተሳታፊዎች: {len(leads_data)} ተጠቃሚዎች\n"
+            f"• 🔥 ለመግዛት የተዘጋጁ (High-Intent Leads): {high_intent_count} ተጠቃሚዎች\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 **የደንበኞች ዝርዝር፣ ስልክ ቁጥር እና የፍላጎት ሁኔታ:**\n"
+        )
+
+        lines = [analytics_header]
+        for idx, lead in enumerate(leads_data[:25], start=1):
+            name = lead.get("visitor_name") or "ስም ያልታወቀ"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
             interest = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
-            last_time = lead.get("updated_at", "")[:16].replace("T", " ")
+            chat_id_str = str(lead.get("visitor_telegram_id"))
+            
+            intent_badge = "🔥 ከፍተኛ የግዢ ፍላጎት ያለው (High Intent)" if chat_id_str in high_intent_clients else "💬 መደበኛ ውይይት"
+            
             lines.append(
-                f"**{idx}. {name}**\n"
-                f"   📞 ስልክ ቁጥር: `{phone}`\n"
-                f"   💬 የጠየቀው/የፈለገው: _{interest}_\n"
-                f"   ⏱️ የመጨረሻ ጊዜ: {last_time}\n"
+                f"**{idx}. የደንበኛ ስም:** {name}\n"
+                f"   📞 **ስልክ ቁጥር:** `{phone}`\n"
+                f"   🛒 **የጠየቀው/የፈለገው ዕቃ:** _{interest}_\n"
+                f"   📌 **ሁኔታ (Status):** {intent_badge}\n"
+                f"   ──────────────────────────\n"
             )
 
-        await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
+        if not leads_data:
+            lines.append("📭 እስካሁን የተመዘገበ ሊድ የለም።")
+
+        full_text = "\n".join(lines)
+        if hasattr(message_target, "edit_text"):
+            await message_target.edit_text(full_text, parse_mode="Markdown")
+        else:
+            await message_target.reply_text(full_text, parse_mode="Markdown")
     except Exception as e:
-        await update.effective_message.reply_text(f"Leads ማምጣት አልተቻለም: {str(e)}")
+        logger.error(f"Analytics display error: {e}")
+        err_msg = f"ስታቲስቲክስ ማምጣት አልተቻለም: {str(e)}"
+        if hasattr(message_target, "edit_text"):
+            await message_target.edit_text(err_msg)
+        else:
+            await message_target.reply_text(err_msg)
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,7 +628,6 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not caption.startswith("/addmedia"):
         return
 
-    # Check store tier permissions
     tier_num = 1
     if supabase:
         try:
@@ -704,7 +803,6 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_input = update.effective_message.text
     chat_id = update.effective_chat.id
     
-    # AI-Powered Data Organization & Structuring
     await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
     
     structured_inventory = raw_input
@@ -756,7 +854,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
-            # Resilient payload matching core Supabase table schema
             store_payload = {
                 "bot_token": bot_token,
                 "owner_telegram_id": owner_telegram_id,
@@ -769,7 +866,6 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
             )
         except Exception as e:
-            # Fallback if plan_tier or other column doesn't exist yet in Supabase schema cache
             logger.error(f"Supabase strict upsert error, attempting graceful fallback: {e}")
             try:
                 fallback_payload = {
@@ -809,6 +905,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "buy_pro":
         await upgrade_command(update, context)
+    elif query.data == "upgrade_tier_1":
+        await process_tier_upgrade_selection(update, context, 1)
+    elif query.data == "upgrade_tier_2":
+        await process_tier_upgrade_selection(update, context, 2)
+    elif query.data == "upgrade_tier_3":
+        await process_tier_upgrade_selection(update, context, 3)
     elif query.data == "view_summary":
         await summary_command(update, context)
     elif query.data == "view_weekly":
@@ -824,6 +926,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("copy_acc_"):
         acc_num = query.data.replace("copy_acc_", "")
         await query.answer(text=f"የሂሳብ ቁጥር ተገልብጧል: {acc_num}", show_alert=True)
+    elif query.data.startswith("select_lead_bot_"):
+        bot_token = query.data.replace("select_lead_bot_", "")
+        store_name = "Selected Store"
+        if supabase:
+            try:
+                res = await asyncio.to_thread(
+                    lambda: supabase.table("stores").select("store_name").eq("bot_token", bot_token).execute()
+                )
+                if res.data:
+                    store_name = res.data[0].get("store_name", "Selected Store")
+            except Exception:
+                pass
+        await show_store_leads_and_analytics(query.message, bot_token, store_name)
 
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
