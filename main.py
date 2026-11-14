@@ -5,6 +5,7 @@ import httpx
 import base64
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, HTTPException, status
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -42,6 +43,13 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
+# 3-Tier Pricing Dictionary
+TIER_PRICES = {
+    1: {"name": "Tier 1 (Starter)", "price": 1000},
+    2: {"name": "Tier 2 (Business)", "price": 2500},
+    3: {"name": "Tier 3 (Enterprise)", "price": 5000},
+}
+
 # Initialize Clients with Fail-Safe Checks & Logging
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 if not supabase:
@@ -57,8 +65,8 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
-# Onboarding Conversation States
-STORE_NAME, INDUSTRY, UI_THEME, INVENTORY, BOT_TOKEN = range(5)
+# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
+STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 
 
 # -------------------------------------------------------------------
@@ -171,9 +179,9 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Dynamic Payout Load Balancer (Whole Birr 3500-3600 ETB Range)
+# Dynamic Payout Load Balancer (Unified with Selected Tier Price)
 # -------------------------------------------------------------------
-async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
+async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, int, str]:
     now = datetime.now(timezone.utc)
     twenty_four_hours_ago = now - timedelta(hours=24)
     
@@ -193,12 +201,11 @@ async def select_optimal_payout_destination() -> tuple[str, str, int, str]:
             logger.error(f"Telebirr 24h cap check error: {e}")
 
     SAFE_TELEBIRR_CAP = 20000.0 
-    whole_birr_amount = random.randint(3500, 3600)
     
-    if telebirr_24h_total + whole_birr_amount <= SAFE_TELEBIRR_CAP:
-        return ("Telebirr Secure Gateway", TELEBIRR_ACCOUNT_MASKED, whole_birr_amount, "TELEBIRR")
+    if telebirr_24h_total + amount_etb <= SAFE_TELEBIRR_CAP:
+        return ("Telebirr Secure Gateway", TELEBIRR_ACCOUNT_MASKED, amount_etb, "TELEBIRR")
     else:
-        return ("Awash Bank Secure Corporate Account", AWASH_ACCOUNT_MASKED, whole_birr_amount, "AWASH")
+        return ("Awash Bank Secure Corporate Account", AWASH_ACCOUNT_MASKED, amount_etb, "AWASH")
 
 
 # -------------------------------------------------------------------
@@ -217,28 +224,45 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "⭐ ፕሮ አባል — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ"
     elif has_access:
         status_text = (
-            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
-            f"• የሚያበቃበት ጊዜ: {expires_str}\n"
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)
+"
+            f"• የሚያበቃበት ጊዜ: {expires_str}
+"
             f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
         )
     else:
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!\n\n"
-        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።\n\n"
-        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
-        "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "3️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "4️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
-        "5️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
+        f"🇪🇹 እንኳን ወደ Nexa AI ስማርት መድረክ ደህና መጡ, {user.first_name}!
+
+"
+        f"ይህ ዳሽቦርድ ሙሉ በሙሉ በ AI የተጎለበተ ነው። የሚፈልጉትን ማንኛውንም ትዕዛዝ በቀጥታ መጻፍ ይችላሉ።
+
+"
+        f"📊 የመለያዎ ሁኔታ:
+{status_text}
+
+"
+        "🎯 ፈጣን መመሪያ:
+"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ
+"
+        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ
+"
+        "3️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ
+"
+        "4️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ
+"
+        "5️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት
+"
+        "6️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
     )
     
     keyboard = [
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (በብር)", callback_data="buy_pro")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
+        [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
         [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
@@ -254,21 +278,33 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("store_name", "bot_token", "ui_theme").eq("owner_telegram_id", owner_id).execute()
+            lambda: supabase.table("stores").select("store_name, bot_token, ui_theme, plan_tier").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ
+━━━━━━━━━━━━━━━━━━━━━━
+
+"
         for idx, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
+            tier_num = store.get("plan_tier", 1)
+            tier_name = TIER_PRICES.get(tier_num, TIER_PRICES[1])["name"]
             bots_list_text += (
-                f"{idx}. {store['store_name']}\n"
-                f"• ቶከን ቁልፍ: {masked_token}\n"
-                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n"
-                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
+                f"{idx}. {store['store_name']}
+"
+                f"• ዕቅድ / ፕላን: {tier_name}
+"
+                f"• ቶከን ቁልፍ: {masked_token}
+"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}
+"
+                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅
+
+"
             )
         await update.effective_message.reply_text(bots_list_text)
     except Exception as e:
@@ -277,14 +313,33 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    channel_name, masked_account, exact_amount_etb, channel_code = await select_optimal_payout_destination()
+    owner_id = str(user_id)
+    
+    # Fetch user's registered store plan_tier
+    tier_num = 1
+    store_name = "Nexa Store"
+    if supabase:
+        try:
+            store_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("store_name, plan_tier").eq("owner_telegram_id", owner_id).execute()
+            )
+            if store_res.data:
+                store_name = store_res.data[0].get("store_name", "Nexa Store")
+                tier_num = store_res.data[0].get("plan_tier", 1)
+        except Exception as e:
+            logger.error(f"Upgrade tier fetch error: {e}")
+
+    tier_info = TIER_PRICES.get(tier_num, TIER_PRICES[1])
+    exact_amount_etb = tier_info["price"]
+    
+    channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
     order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
     
     if supabase:
         try:
             await asyncio.to_thread(
                 lambda: supabase.table("pending_orders").upsert({
-                    "user_id": str(user_id),
+                    "user_id": owner_id,
                     "order_id": order_id,
                     "amount": str(exact_amount_etb),
                     "channel": channel_name,
@@ -296,20 +351,79 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Pending order save error: {e}")
     
     invoice_text = (
-        f"🔒 ደህንነቱ የተጠበቀ የክፍያ መጠየቂያ\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የደረሰኝ ቁጥር: {order_id}\n"
-        f"• የክፍያ መጠን: {exact_amount_etb} ብር\n"
-        f"• የክፍያ መንገድ: {channel_name}\n"
-        f"• የሂሳብ ቁጥር: {masked_account}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🚨 መመሪያ:\n1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb} ብር ያስተላልፉ።\n2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
+        f"⭐ **ፕሮ አባልነት ማሻሻያ ({store_name})**
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• የተመረጠው ዕቅድ: {tier_info['name']}
+"
+        f"• የክፍያ መጠን: {exact_amount_etb:,} ብር / ወር
+"
+        f"• የደረሰኝ ቁጥር: {order_id}
+"
+        f"• የክፍያ መንገድ: {channel_name}
+"
+        f"• የሂሳብ ቁጥር: {masked_account}
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
+        f"🚨 መመሪያ:
+1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb:,} ብር ያስተላልፉ።
+2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
     )
     keyboard = [
         [InlineKeyboardButton(f"📋 ሂሳብ ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
-    await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        store_res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("bot_token, store_name").eq("owner_telegram_id", owner_id).execute()
+        )
+        if not store_res.data:
+            await update.effective_message.reply_text("❌ እስካሁን የተመዘገበ ቦት የለዎትም። ለመፍጠር /register ይጠቀሙ።")
+            return
+
+        bot_token = store_res.data[0]["bot_token"]
+        store_name = store_res.data[0]["store_name"]
+
+        leads_res = await asyncio.to_thread(
+            lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(30).execute()
+        )
+
+        if not leads_res.data:
+            await update.effective_message.reply_text(f"📭 እስካሁን ለ **{store_name}** የተመዘገቡ የደንበኛ Leads የሉም።", parse_mode="Markdown")
+            return
+
+        lines = [f"📋 **የደንበኛ Leads & ጥያቄዎች — {store_name}**
+━━━━━━━━━━━━━━━━━━━━━━
+"]
+        for idx, lead in enumerate(leads_res.data, start=1):
+            name = lead.get("visitor_name") or "ስም ያልታወቀ ጎብኚ"
+            phone = lead.get("phone_number") or "አልሰጠም ❌"
+            interest = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
+            lines.append(
+                f"**{idx}. {name}**
+"
+                f"   📞 ስልክ ቁጥር: `{phone}`
+"
+                f"   💬 የጠየቀው/የፈለገው: _{interest}_
+"
+            )
+
+        await update.effective_message.reply_text("
+".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await update.effective_message.reply_text(f"Leads ማምጣት አልተቻለም: {str(e)}")
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,12 +451,21 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Summary fetch error: {e}")
 
-    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር\n" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
+    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር
+" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
     summary_text = (
-        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\n"
-        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች\n"
-        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n🏆 ከፍተኛ ከፋዮች:\n{top_payers_text}"
+        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ
+━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች
+"
+        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች
+"
+        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር
+━━━━━━━━━━━━━━━━━━━━━━
+
+🏆 ከፍተኛ ከፋዮች:
+{top_payers_text}"
     )
     await update.effective_message.reply_text(summary_text)
 
@@ -380,10 +503,17 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
-        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
-        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
+        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)
+━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች
+"
+        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች
+"
+        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር
+━━━━━━━━━━━━━━━━━━━━━━
+
+💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
     )
     await update.effective_message.reply_text(weekly_text)
 
@@ -394,7 +524,11 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not new_inventory:
         await update.effective_message.reply_text(
-            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:\n\n/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።\nምሳሌ:\n/update ጫማ - 2,800 ብር"
+            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:
+
+/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።
+ምሳሌ:
+/update ጫማ - 2,800 ብር"
         )
         return
 
@@ -412,16 +546,75 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------------------------
-# Onboarding Conversation Handlers
+# Media Upload Handler for Store Owners (/addmedia)
+# -------------------------------------------------------------------
+async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    message = update.message
+    caption = (message.caption or "").strip()
+
+    if not caption.startswith("/addmedia"):
+        return
+
+    parts = caption.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.reply_text("⚠️ አጠቃቀም: ፎቶ ወይም ቪዲዮ ከዚህ መግለጫ ጋር ይላኩ:
+`/addmedia tag_id [መግለጫ]`", parse_mode="Markdown")
+        return
+
+    item_tag = parts[1].lower().strip()
+    desc = parts[2] if len(parts) > 2 else ""
+
+    if supabase:
+        try:
+            store_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", owner_id).execute()
+            )
+            if not store_res.data:
+                await message.reply_text("❌ እባክዎ መጀመሪያ /register በመጠቀም መደብር ይፍጠሩ።")
+                return
+            bot_token = store_res.data[0]["bot_token"]
+
+            if message.photo:
+                file_id = message.photo[-1].file_id
+                media_type = "photo"
+            elif message.video:
+                file_id = message.video.file_id
+                media_type = "video"
+            else:
+                await message.reply_text("⚠️ እባክዎ ትክክለኛ ፎቶ ወይም ቪዲዮ ያያይዙ።")
+                return
+
+            await asyncio.to_thread(
+                lambda: supabase.table("property_media").insert({
+                    "bot_token": bot_token,
+                    "item_tag": item_tag,
+                    "media_type": media_type,
+                    "file_id": file_id,
+                    "caption": desc
+                }).execute()
+            )
+            await message.reply_text(f"✅ ሚዲያ በሰኬት ተቀምጧል! (Tag: **`{item_tag}`**)", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Media upload error: {e}")
+            await message.reply_text("⚠️ ሚዲያ ማስቀመጥ አልተቻለም።")
+
+
+# -------------------------------------------------------------------
+# Onboarding Conversation Handlers (Including 3-Tier Selection)
 # -------------------------------------------------------------------
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if not message:
         return STORE_NAME
     await message.reply_text(
-        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት\n\n"
-        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።\n\n"
-        "እርምጃ 1 ከ 4: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: አዲስ ሪል እስቴት)"
+        "🇪🇹 NEXA AI ቦት ፈጣሪ ረዳት
+
+"
+        "የቴሌግራም AI ቦትዎን በቀላል ደረጃዎች እንፍጠር።
+
+"
+        "እርምጃ 1 ከ 5: የንግድዎ፣ የመደብርዎ ወይም የአገልግሎትዎ ትክክለኛ ስም ማን ነው? (ለምሳሌ: አዲስ ሪል እስቴት)"
     )
     return STORE_NAME
 
@@ -440,8 +633,10 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.effective_message.reply_text(
-        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.\n\n"
-        "እርምጃ 2 ከ 4: ዋናውን የስራ ዘርፍ ይምረጡ:",
+        f"የንግድ ስም ተመዝግቧል: {update.effective_message.text}.
+
+"
+        "እርምጃ 2 ከ 5: ዋናውን የስራ ዘርፍ ይምረጡ:",
         reply_markup=reply_markup
     )
     return INDUSTRY
@@ -469,8 +664,10 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.\n\n"
-        "እርምጃ 3 ከ 4: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
+        f"የተመረጠው ዘርፍ: {chosen_industry.capitalize()}.
+
+"
+        "እርምጃ 3 ከ 5: የ AI ረዳትዎ ከደንበኞች ጋር እንዴት ማውራት እንዳለበት ይምረጡ:",
         reply_markup=reply_markup
     )
     return UI_THEME
@@ -489,8 +686,39 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["ui_theme"] = chosen_theme
     
+    keyboard = [
+        [InlineKeyboardButton("🥉 tier 1 (1,000 ብር / ወር)", callback_data="tier_1")],
+        [InlineKeyboardButton("🥈 tier 2 (2,500 ብር / ወር)", callback_data="tier_2")],
+        [InlineKeyboardButton("🥇 tier 3 (5,000 ብር / ወር)", callback_data="tier_3")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await target_message(
-        "እርምጃ 4 ከ 4: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
+        "እርምጃ 4 ከ 5: የሚፈልጉትን የክፍያ እና የባሪዮች ደረጃ (Tier) ይምረጡ:",
+        reply_markup=reply_markup
+    )
+    return PLAN_TIER
+
+
+async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tier_num = 1
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        tier_num = int(query.data.replace("tier_", ""))
+        target_message = query.edit_message_text
+    else:
+        tier_num = 1
+        target_message = update.effective_message.reply_text
+
+    context.user_data["plan_tier"] = tier_num
+    tier_info = TIER_PRICES.get(tier_num, TIER_PRICES[1])
+
+    await target_message(
+        f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር)
+
+"
+        "እርምጃ 5 ከ 5: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
     )
     return INVENTORY
 
@@ -498,7 +726,9 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = update.effective_message.text
     await update.effective_message.reply_text(
-        "ሊጠናቀቅ ነው።!\n\n"
+        "ሊጠናቀቅ ነው።!
+
+"
         "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -510,6 +740,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store_name = context.user_data.get("store_name", "My Store")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
     ui_theme = context.user_data.get("ui_theme", "executive")
+    plan_tier = context.user_data.get("plan_tier", 1)
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     
@@ -534,18 +765,28 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "owner_telegram_id": owner_telegram_id,
                     "store_name": store_name,
                     "inventory_data": inventory_data,
-                    "ui_theme": ui_theme
+                    "ui_theme": ui_theme,
+                    "plan_tier": plan_tier
                 }, on_conflict="bot_token").execute()
             )
         except Exception as e:
             await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(e)}")
             return BOT_TOKEN
 
+    tier_name = TIER_PRICES.get(plan_tier, TIER_PRICES[1])["name"]
     await update.effective_message.reply_text(
-        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀\n\n"
-        f"• የንግድ ስም: {store_name}\n"
-        f"• የቦት ዘይቤ: {ui_theme.capitalize()}\n"
-        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅\n\n"
+        f"🎉 እንኳን ደስ አለዎት! የ AI ቦትዎ በሥራ ላይ ውሏል! 🇪🇹🚀
+
+"
+        f"• የንግድ ስም: {store_name}
+"
+        f"• የተመረጠው ዕቅድ: {tier_name}
+"
+        f"• የቦት ዘይቤ: {ui_theme.capitalize()}
+"
+        f"• ሁኔታ: ተገናኝቷል እና ንቁ ነው ✅
+
+"
         "ደንበኞችዎ ቦትዎን ሲጀምሩ (/start) ቀጥተኛ ውይይት ይጀምራሉ።"
     )
     return ConversationHandler.END
@@ -571,6 +812,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await weekly_summary_command(update, context)
     elif query.data == "view_my_bots":
         await my_bots_command(update, context)
+    elif query.data == "view_leads":
+        await leads_command(update, context)
+    elif query.data == "start_register":
+        await register_start(update, context)
     elif query.data == "upload_receipt":
         await query.message.reply_text("📸 እባክዎ የክፍያ ደረሰኝ ፎቶ (Screenshot) ይላኩ።")
     elif query.data.startswith("copy_acc_"):
@@ -606,9 +851,12 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if async_groq_client:
         try:
             prompt = (
-                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
-                f"1. Transaction Reference ID or Confirmation Code (string)\n"
-                f"2. Total Amount in ETB transferred (number or string without commas)\n"
+                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:
+"
+                f"1. Transaction Reference ID or Confirmation Code (string)
+"
+                f"2. Total Amount in ETB transferred (number or string without commas)
+"
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string"}}'
             )
@@ -655,7 +903,8 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
-        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n• የግብይት መለያ: {ref_id}")
+        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹
+• የግብይት መለያ: {ref_id}")
     else:
         if ADMIN_TELEGRAM_ID:
             try:
@@ -677,8 +926,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
-        "Classify into: 'mybots', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        "Return strictly valid JSON: {\"intent\": \"category\", \"reply\": \"helpful response\"}"
+        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
+        "Return strictly valid JSON: {"intent": "category", "reply": "helpful response"}"
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ?"}
     if async_groq_client:
@@ -696,6 +945,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     intent = intent_result.get("intent")
     if intent == "mybots":
         await my_bots_command(update, context)
+    elif intent == "leads":
+        await leads_command(update, context)
     elif intent == "summary":
         await summary_command(update, context)
     elif intent == "weekly":
@@ -754,6 +1005,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     message = data.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
+    user_obj = message.get("from", {})
+    visitor_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip() or "Anonymous"
     
     if not chat_id or not user_text:
         return {"ok": True}
@@ -773,13 +1026,32 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         return {"ok": True}
 
+    # Automatically record lead & parse phone number / interest
     if supabase:
         try:
             await asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
                 "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
             }, on_conflict="bot_token,chat_id").execute())
-        except Exception:
-            pass
+
+            phone_match = re.search(r"(\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
+            phone_number = phone_match.group(0) if phone_match else None
+            summary_snippet = user_text[:120] + ("..." if len(user_text) > 120 else "")
+
+            lead_payload = {
+                "bot_token": bot_token,
+                "visitor_telegram_id": str(chat_id),
+                "visitor_name": visitor_name,
+                "interest_summary": summary_snippet,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            if phone_number:
+                lead_payload["phone_number"] = phone_number
+
+            await asyncio.to_thread(lambda: supabase.table("leads").upsert(
+                lead_payload, on_conflict="bot_token,visitor_telegram_id"
+            ).execute())
+        except Exception as e:
+            logger.error(f"Lead record error: {e}")
 
     if user_text == "/start":
         if supabase:
@@ -800,16 +1072,14 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         }
 
         direct_welcome = (
-            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
-            f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። በምን ልረዳዎ?"
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!
+
+"
+            f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
             "chat_id": chat_id,
             "text": direct_welcome
-        })
-        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": "🛡️ **የደህንነት እና የታማኝነት ማስታወሻ**: የእርስዎ ውይይቶች እና መረጃዎች ሙሉ በሙሉ የተመሰጠሩ (Encrypted) እና ደህንነታቸው የተጠበቁ ናቸው።"
         })
         return {"ok": True}
 
@@ -831,11 +1101,22 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         except Exception:
             pass
 
+    # Fetch available property/service media tags for this bot
+    available_tags = []
+    if supabase:
+        try:
+            media_res = await asyncio.to_thread(lambda: supabase.table("property_media").select("item_tag, caption").eq("bot_token", bot_token).execute())
+            if media_res.data:
+                available_tags = list({f"{m['item_tag']} ({m.get('caption', '')})" for m in media_res.data})
+        except Exception:
+            pass
+
     payload = {
         "chat_id": chat_id, "user_text": user_text, "bot_token": bot_token,
         "store_name": store.get("store_name", "Our Business"), "inventory_data": store.get("inventory_data", ""),
         "owner_telegram_id": store.get("owner_telegram_id"), "customer_lang": customer_lang,
-        "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages
+        "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages,
+        "available_tags": available_tags
     }
     
     return await store_chat_webhook(payload)
@@ -852,6 +1133,7 @@ async def store_chat_webhook(payload: dict):
     customer_lang = payload.get("customer_lang", "amharic")
     ui_theme = payload.get("ui_theme", "executive")
     history_messages = payload.get("history_messages", [])
+    available_tags = payload.get("available_tags", [])
 
     if owner_telegram_id:
         try:
@@ -886,7 +1168,9 @@ async def store_chat_webhook(payload: dict):
         "minimalist": "Be direct, concise, and straight to the point."
     }
 
-    # Enhanced Analytical & Store-Grounded System Prompt
+    tags_str = ", ".join(available_tags) if available_tags else "None"
+
+    # Enhanced Analytical & Media-Aware System Prompt
     system_prompt = f"""
     You are an advanced, intelligent AI sales and analytical assistant for {store_name}. 
     Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
@@ -895,9 +1179,10 @@ async def store_chat_webhook(payload: dict):
     Core Directives & Analytical Approach:
     - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
     - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
-    - If a customer asks about a product, service, or general inquiry, evaluate the store catalog context and give a structured, professional, and helpful response.
+    - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response.
     - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
-    - Always maintain trust, clarity, and security.
+    
+    Available Media Tags: {tags_str}
     
     Live Store Catalog Data:
     {inventory_data}
@@ -922,6 +1207,10 @@ async def store_chat_webhook(payload: dict):
             logger.error(f"Groq Chat Error: {e}")
             ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
+    # Parse media tag if returned by AI
+    tag_match = re.search(r"\[SEND_MEDIA:([a-zA-Z0-9_-]+)\]", ai_reply)
+    clean_ai_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_-]+\]", "", ai_reply).strip()
+
     if supabase:
         try:
             now_user = datetime.now(timezone.utc)
@@ -932,15 +1221,42 @@ async def store_chat_webhook(payload: dict):
             }).execute())
             
             await asyncio.to_thread(lambda: supabase.table("chat_history").insert({
-                "chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": ai_reply, "created_at": now_assistant.isoformat()
+                "chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()
             }).execute())
         except Exception as e:
             logger.error(f"Chat history insert error: {e}")
 
+    # Send text message
     await http_client.post(
         f"https://api.telegram.org/bot{bot_token}/sendMessage",
-        json={"chat_id": chat_id, "text": ai_reply}
+        json={"chat_id": chat_id, "text": clean_ai_reply}
     )
+
+    # Dispatch media if tag was requested
+    if tag_match and supabase:
+        requested_tag = tag_match.group(1).lower()
+        try:
+            media_rows = await asyncio.to_thread(
+                lambda: supabase.table("property_media").select("*").eq("bot_token", bot_token).eq("item_tag", requested_tag).execute()
+            )
+            if media_rows.data:
+                for item in media_rows.data:
+                    file_id = item["file_id"]
+                    media_type = item["media_type"]
+                    caption = item.get("caption") or ""
+                    if media_type == "photo":
+                        await http_client.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendPhoto",
+                            json={"chat_id": chat_id, "photo": file_id, "caption": caption}
+                        )
+                    elif media_type == "video":
+                        await http_client.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendVideo",
+                            json={"chat_id": chat_id, "video": file_id, "caption": caption}
+                        )
+        except Exception as e:
+            logger.error(f"Media dispatch error: {e}")
+
     return {"ok": True}
 
 
@@ -962,6 +1278,10 @@ conv_handler = ConversationHandler(
             CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
         ],
+        PLAN_TIER: [
+            CallbackQueryHandler(receive_plan_tier, pattern="^tier_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_tier)
+        ],
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
     },
@@ -970,11 +1290,13 @@ conv_handler = ConversationHandler(
 
 telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+telegram_app.add_handler(CommandHandler("leads", leads_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
 telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
 telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
 telegram_app.add_handler(conv_handler)
 telegram_app.add_handler(CallbackQueryHandler(button_handler))
+telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
