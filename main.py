@@ -1409,46 +1409,25 @@ async def analyze_and_upsert_lead(
 
         intent_lvl = str(structured_data.get("intent_level", "low")).lower()
         action_summary = structured_data.get("action_summary") or user_text[:100]
+        is_vip = bool(structured_data.get("is_high_payer", False))
+        vip_prefix = "💎 VIP | " if is_vip else ""
 
-        # First attempt: save with full schema columns including ai_analysis
+        # Upsert directly using your existing Supabase leads table schema
         lead_payload = {
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
             "visitor_name": structured_data.get("customer_name") or visitor_name,
-            "interest_summary": action_summary,
-            "requested_items": structured_data.get("requested_items"),
-            "estimated_budget": float(structured_data.get("estimated_budget") or 0),
-            "intent_level": intent_lvl,
-            "is_high_payer": bool(structured_data.get("is_high_payer", False)),
-            "ai_analysis": structured_data,
+            "interest_summary": f"[{intent_lvl.upper()}] {vip_prefix}{action_summary}",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         if phone:
             lead_payload["phone_number"] = phone
 
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("leads").upsert(
-                    lead_payload, on_conflict="bot_token,visitor_telegram_id"
-                ).execute()
-            )
-        except Exception as schema_err:
-            # Fallback for Supabase tables lacking extra JSON/boolean columns (e.g., ai_analysis)
-            logger.warning(f"Extended leads schema missing columns, falling back to core schema: {schema_err}")
-            fallback_lead = {
-                "bot_token": bot_token,
-                "visitor_telegram_id": str(chat_id),
-                "visitor_name": lead_payload["visitor_name"],
-                "interest_summary": f"[{intent_lvl.upper()}] {action_summary}",
-                "updated_at": lead_payload["updated_at"]
-            }
-            if phone:
-                fallback_lead["phone_number"] = phone
-            await asyncio.to_thread(
-                lambda: supabase.table("leads").upsert(
-                    fallback_lead, on_conflict="bot_token,visitor_telegram_id"
-                ).execute()
-            )
+        await asyncio.to_thread(
+            lambda: supabase.table("leads").upsert(
+                lead_payload, on_conflict="bot_token,visitor_telegram_id"
+            ).execute()
+        )
     except Exception as e:
         logger.error(f"AI Lead Structuring Error: {e}")
 
