@@ -1228,8 +1228,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
         "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade). "
+        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
         "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in Amharic guiding them precisely what to do or click"}'
+        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞችን ስልክ ቁጥር ለማየት /leads፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
@@ -1512,9 +1513,9 @@ async def store_chat_webhook(payload: dict):
     )
 
     lang_instructions = {
-        "amharic": "በአማርኛ ቋንቋ ብቻ መልስ ስጥ.",
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል (Ge'ez) ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም። የቃላት አገባብህና ሰዋሰውህ እንደ ኢትዮጵያዊ የቋንቋ ባለሙያ እጅግ የጠራ ይሁን።",
         "english": "Respond in English.",
-        "oromo": "Afaan Oromootን deebisi."
+        "oromo": "Afaan Oromootiin deebisi."
     }
 
     theme_prompts = {
@@ -1537,6 +1538,7 @@ async def store_chat_webhook(payload: dict):
     Core Directives & Analytical Approach:
     - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
     - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
+    - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
     - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
     - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
     
