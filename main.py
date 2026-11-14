@@ -323,36 +323,54 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store fetch error: {e}")
 
-    # Generate preview varied amounts for direct USSD links on buttons
-    t1_preview = random.randint(1000, 1100)
-    t2_preview = random.randint(2500, 2600)
-    t3_preview = random.randint(5000, 5100)
+    # Generate varied amounts (base + 0..100 ETB) for direct Telebirr USSD links
+    t1_amount = random.randint(1000, 1100)
+    t2_amount = random.randint(2500, 2600)
+    t3_amount = random.randint(5000, 5100)
 
-    url_make_alive = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_preview}%23"
-    url_tier_1 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_preview}%23"
-    url_tier_2 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t2_preview}%23"
-    url_tier_3 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t3_preview}%23"
+    # Save initial pending order so AI-OCR receipt verification works immediately after payment
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("pending_orders").upsert({
+                    "user_id": owner_id,
+                    "order_id": f"NEXA-SECURE-{random.randint(1000, 9999)}",
+                    "amount": str(t1_amount),
+                    "channel": "Telebirr Secure Gateway",
+                    "destination_code": "TELEBIRR",
+                    "status": "pending_payment"
+                }, on_conflict="user_id").execute()
+            )
+        except Exception as e:
+            logger.error(f"Pending order init error: {e}")
+
+    url_tier_1 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_amount}%23"
+    url_tier_2 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t2_amount}%23"
+    url_tier_3 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t3_amount}%23"
 
     keyboard = [
-        [InlineKeyboardButton("🚀 ቦቱን ለአንድ ወር አሰልፍ (Make Alive)", url=url_make_alive)],
-        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", url=url_tier_1)],
-        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", url=url_tier_2)],
-        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", url=url_tier_3)]
+        [InlineKeyboardButton(f"🥉 Tier 1: Starter ({t1_amount:,} ብር / ወር)", url=url_tier_1)],
+        [InlineKeyboardButton(f"🥈 Tier 2: Business Pro ({t2_amount:,} ብር / ወር)", url=url_tier_2)],
+        [InlineKeyboardButton(f"🥇 Tier 3: Enterprise VIP ({t3_amount:,} ብር / ወር)", url=url_tier_3)],
+        [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን (Upload Receipt)", callback_data="upload_receipt")]
     ]
     
     tier_select_text = (
-        f"⭐ **የፕሮ አባልነት ዕቅድ ማሻሻያ እና የቦት ማግበሪያ ({store_name})**\n"
+        f"⭐ **የፕሮ አባልነት ዕቅዶች ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• **ቦቱን ለአንድ ወር አሰልፍ (Make Alive)**: 1,000 ብር (Starter Tier)\n"
-        f"• **Tier 1 (Starter - 1,000 ብር)**: Core AI Sales, Text Catalog, Photo Support, Basic Leads\n"
-        f"• **Tier 2 (Business Pro - 2,500 ብር)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
-        f"• **Tier 3 (Enterprise VIP - 5,000 ብር)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
+        f"• **Tier 1 (Starter)**: Core AI Sales, Text Catalog, Photo Support, Basic Leads\n"
+        f"• **Tier 2 (Business Pro)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
+        f"• **Tier 3 (Enterprise VIP)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"እባክዎ በቀጥታ በቴሌብር USSD ለመክፈል ከታች ያሉትን ቁልፎች ይጫኑ:"
+        f"💳 **የቴሌብር ስልክ ቁጥር:** `{TELEBIRR_ACCOUNT_MASKED}`\n\n"
+        f"ከታች ካሉት 3 ዕቅዶች አንዱን ሲጫኑ በቀጥታ ወደ ቴሌብር መደወያ (`*127*2*...#`) ይወስድዎታል። ክፍያውን እንደፈጸሙ ደረሰኙን (Screenshot) ይላኩ!"
     )
     
     if update.callback_query:
-        await update.callback_query.message.edit_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        try:
+            await update.callback_query.message.edit_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except Exception:
+            await update.callback_query.message.reply_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         await update.effective_message.reply_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -1062,7 +1080,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if query.data == "buy_pro":
+    if query.data in ["buy_pro", "upgrade"]:
         await upgrade_command(update, context)
     elif query.data in ["upgrade_tier_1", "tier_pay_1", "tier_1"]:
         await process_tier_upgrade_selection(update, context, 1)
