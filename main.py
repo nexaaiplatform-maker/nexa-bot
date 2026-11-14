@@ -390,6 +390,7 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
         except Exception as e:
             logger.error(f"Pending order save error: {e}")
     
+    # Exact USSD dialer link format: *127*2*0965205354*amount#
     telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
 
     invoice_text = (
@@ -398,11 +399,12 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
         f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** (Varied)\n"
         f"• የደረሰኝ ቁጥር: {order_id}\n"
-        f"• የቴሌብር ቁጥር: `{masked_account}`\n"
-        f"• 🔗 [ቀጥተኛ የቴሌብር መክፈያ ሊንክ]({telebirr_ussd_url})\n"
+        f"• የቴሌብር ቁጥር: `{masked_account}` 📱\n"
+        f"• USSD ትዕዛዝ: `*127*2*{masked_account}*{exact_amount_etb}#`\n"
+        f"• 🔗 [ስልክ ላይ በራሱ እንዲደውል እዚህ ይጫኑ]({telebirr_ussd_url})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⚠️ **ማሳሰቢያ (Notice):**\n"
-        f"1. ከላይ ያለውን ሊንክ ወይም ቁልፍ ሲጫኑ ስልክዎ ላይ `*127*2*{masked_account}*{exact_amount_etb}#` ተሞልቶ ይከፈታል።\n"
+        f"1. ከላይ ያለውን ሊንክ ሲጫኑ ስልክዎ ላይ `*127*2*{masked_account}*{exact_amount_etb}#` በቀጥታ ተሞልቶ ይከፈታል።\n"
         f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
         f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
     )
