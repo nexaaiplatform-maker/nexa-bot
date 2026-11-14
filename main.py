@@ -654,16 +654,16 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             if http_client:
                 try:
                     t_info = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo", timeout=3.0)
-                    # Handle 401 Unauthorized or invalid tokens gracefully without failing system startup
                     if t_info.status_code == 200:
                         current_t_wh = t_info.json().get("result", {}).get("url", "")
                         if current_t_wh != expected_tenant_wh:
                             await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
                     elif t_info.status_code == 401:
-                        logger.warning(f"⚠️ Tenant bot token {bot_token[:8]}... is unauthorized or deleted on Telegram. Skipping.")
-                except Exception as ex:
-                    logger.debug(f"Tenant webhook check skipped for {bot_token[:8]}...: {ex}")
+                        # Silently pass expired/revoked bot tokens without cluttering warning logs
+                        pass
+                except Exception:
+                    pass
 
             updates_needed = {}
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
