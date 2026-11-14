@@ -320,16 +320,19 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if supabase:
         try:
             store_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("store_name, plan_tier").eq("owner_telegram_id", owner_id).execute()
+                lambda: supabase.table("stores").select("store_name, plan_tier").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
             )
             if store_res.data:
                 store_name = store_res.data[0].get("store_name", "Nexa Store")
-                tier_num = store_res.data[0].get("plan_tier", 1)
+                tier_num = int(store_res.data[0].get("plan_tier") or 1)
         except Exception as e:
             logger.error(f"Upgrade tier fetch error: {e}")
 
     tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
-    exact_amount_etb = tier_info["price"]
+    base_price = tier_info["price"]
+    
+    # 100 ብር ልዩነት ያለው ትክክለኛ የክፍያ መጠን በራስ-ሰር ማመንጨት (ለምሳሌ: 1000 - 1100 ብር)
+    exact_amount_etb = random.randint(base_price, base_price + 100)
     
     channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
     order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
@@ -349,19 +352,27 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Pending order save error: {e}")
     
+    # መደበኛ የቴሌብር USSD ቀጥተኛ መክፈቻ ሊንክ (ስልኩ ላይ ቁጥር እና መጠን በራሱ ያስገባል)
+    telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
+
     invoice_text = (
         f"⭐ **ፕሮ አባልነት ማሻሻያ ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የክፍያ መጠን: {exact_amount_etb:,} ብር / ወር\n"
+        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** / ወር\n"
         f"• የደረሰኝ ቁጥር: {order_id}\n"
         f"• የክፍያ መንገድ: {channel_name}\n"
-        f"• የሂሳብ ቁጥር: {masked_account}\n"
+        f"• የሂሳብ/ስልክ ቁጥር: `{masked_account}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🚨 መመሪያ:\n1. ከላይ ያለውን የሂሳብ ቁጥር በመጠቀም {exact_amount_etb:,} ብር ያስተላልፉ።\n2. የተሳካውን የክፍያ ደረሰኝ ፎቶ (Screenshot) በመላክ ያረጋግጡ።"
+        f"⚠️ **ማሳሰቢያ (Notice):**\n"
+        f"1. ከታች ያለውን **'በቴሌብር በቀጥታ ለመክፈል'** የሚለውን ቁልፍ ይጫኑ (ቁጥርዎ እና መጠኑ በራሱ ይሞላል)።\n"
+        f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
+        f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
     )
+    
     keyboard = [
-        [InlineKeyboardButton(f"📋 ሂሳብ ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
+        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል እዚህ ይጫኑ", url=telebirr_ussd_url)],
+        [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
     await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
