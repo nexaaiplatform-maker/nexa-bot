@@ -262,7 +262,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
         "4️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
         "5️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
-        "6️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል"
+        "6️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል\n"
+        "7️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
     )
     
     keyboard = [
@@ -1632,6 +1633,7 @@ conv_handler = ConversationHandler(
 
 telegram_app.add_handler(CommandHandler("start", start_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+telegram_app.add_handler(CommandHandler("pay", upgrade_command))
 telegram_app.add_handler(CommandHandler("leads", leads_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("audit", audit_command))
