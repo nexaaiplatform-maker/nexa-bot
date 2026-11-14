@@ -860,13 +860,13 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if async_groq_client:
         try:
             prompt = (
-                f"Analyze and re-organize the following raw store catalog or inventory text into a clean, highly structured, "
-                f"professional format with clear headings, item names, prices in ETB, and descriptions:\n\n{raw_input}"
+                f"You are an expert database and catalog structurer. Clean up, re-organize, and simplify the following raw store inventory or catalog text "
+                f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:\n\n{raw_input}"
             )
             completion = await async_groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                temperature=0.2
             )
             structured_inventory = completion.choices[0].message.content
         except Exception as e:
@@ -1158,10 +1158,12 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
+        "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
+        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade). "
         "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response"}'
+        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in Amharic guiding them precisely what to do or click"}'
     )
-    intent_result = {"intent": "general", "reply": "ሰላም! ምን ልረዳዎ እችላለሁ?"}
+    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞችን ስልክ ቁጥር ለማየት /leads፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
@@ -1188,7 +1190,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif intent == "upgrade":
         await upgrade_command(update, context)
     else:
-        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! በምን ልረዳዎ እችላለሁ?"))
+        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
 
 
 @app.on_event("startup")
