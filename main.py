@@ -780,7 +780,7 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
 
     await target_msg.reply_text(
-        "🤖 **새로운 AI ቦት ምዝገባ (Step 1 from 5)**\n\n"
+        "🤖 **አዲስ የ AI ቦት ምዝገባ (Step 1 from 5)**\n\n"
         "እባክዎ ለንግድዎ ወይም ለመደብርዎ የሚሆን ስም (Store/Business Name) ይጻፉ:",
         parse_mode="Markdown"
     )
