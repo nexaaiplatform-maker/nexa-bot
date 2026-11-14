@@ -388,24 +388,21 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
             )
         except Exception as e:
             logger.error(f"Pending order save error: {e}")
-    
-    telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
 
     invoice_text = (
         f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
-        f"• የክፍያ መቀበያ ቁጥር: `{masked_account}`\n"
+        f"• የክፍያ መቀበያ ቁጥር (Telebirr): `{masked_account}`\n"
         f"• የደረሰኝ ቁጥር: {order_id}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
-        f"1. በስልክዎ `*127*2*{masked_account}*{exact_amount_etb}#` በመደወል ወይም ከታች ያለውን ሊንክ በመጠቀም ክፍያውን ይፈጽሙ።\n"
-        f"2. ከፍሎ ሲጨርስ የሚመጣውን የቴሌብር የግብይት ቁጥር (Transaction ID) ወይም የደረሰኝ ቅጽበት (Screenshot) እዚህ ይላኩ።\n"
-        f"3. አስተዳዳሪው በግብይት ቁጥሩ ያረጋግጥልዎታል።"
+        f"1. በስልክዎ የቴሌብር መተግበሪያ በመጠቀም ከላይ ወደተጠቀሰው ቁጥር `{masked_account}` ትክክለኛውን `{exact_amount_etb:,} ብር` ያስተላልፉ።\n"
+        f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) ወይም የግብይት ቁጥር (Transaction ID) እዚህ ይላኩ።\n"
+        f"3. የ AI-OCR ሲስተሙ ክፍያዎን ወዲያውኑ አረጋግጦ አካውንትዎን ይከፍትልዎታል።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል", url=telebirr_ussd_url)],
         [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
@@ -490,31 +487,17 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
             name = lead.get("visitor_name") or "ስም ያልታወቀ"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
             chat_id_val = lead.get("visitor_telegram_id") or "N/A"
-            items = lead.get("requested_items") or "አልተለየም"
             summary = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
-            budget = float(lead.get("estimated_budget") or 0)
-            intent_val = str(lead.get("intent_level", "low")).lower()
             is_vip = bool(lead.get("is_high_payer", False))
 
-            if is_vip:
-                intent_badge = "💎 ከፍተኛ ከፋይ (VIP High-Payer)"
-            elif intent_val == "high":
-                intent_badge = "🔥 ከፍተኛ የግዢ ፍላጎት (High Intent)"
-            elif intent_val == "medium":
-                intent_badge = "⚡ መካከለኛ ፍላጎት (Medium)"
-            else:
-                intent_badge = "💬 መደበኛ ውይይት (Low)"
-
-            budget_str = f"{budget:,.0f} ብር" if budget > 0 else "አልተገለጸም"
+            intent_badge = "💎 ከፍተኛ ከፋይ (VIP High-Payer)" if is_vip else "💬 ንቁ ደንበኛ (Lead)"
 
             lines.append(
                 f"**{idx}. የደንበኛ ስም:** {name}\n"
                 f"   📞 **ስልክ ቁጥር:** `{phone}`\n"
                 f"   🆔 **ቴሌግራም ID (Chat ID):** `{chat_id_val}`\n"
-                f"   🛍️ **የፈለገው ዕቃ:** {items}\n"
-                f"   💰 **ግምታዊ በጀት:** {budget_str}\n"
-                f"   📌 **የአጠቃላይ ውይይት ማጠቃለያ:** _{summary}_\n"
-                f"   🏷️ **ሁኔታ (Status):** {intent_badge}\n"
+                f"   📌 **የውይይት ማጠቃለያ:** _{summary}_\n"
+                f"   🏷️ **ሁኔታ:** {intent_badge}\n"
                 f"   ──────────────────────────\n"
             )
 
@@ -524,7 +507,6 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
         full_text = "\n".join(lines)
         if hasattr(message_target, "edit_text"):
             try:
-                await message_target.edit_key = True
                 await message_target.edit_text(full_text, parse_mode="Markdown")
             except Exception as edit_err:
                 if "Message is not modified" in str(edit_err):
@@ -645,16 +627,31 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
         f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
     )
     await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
-    if supabase:
-        try:
-            res = await asyncio.to_thread(
-                lambda: supabase.table("stores").update({"inventory_data": structured_inventory}).eq("owner_telegram_id", owner_id).execute()
-            )
-            if res.data:
-                await update.effective_message.reply_text("✅ በ AI ተተንትኖ እና ተስተካክሎ በሁሉም ቦቶችዎ ላይ በቅጽበት ተሻሽሏል!")
-                return
-        except Exception as e:
-            logger.error(f"Update error: {e}")
+
+
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    text_content = update.effective_message.text.replace("/update", "").strip()
+    if not text_content:
+        await update.effective_message.reply_text(
+            "⚠️ እባክዎ ማሻሻል የሚፈልጉትን አዲስ የዕቃ ዝርዝር ወይም ካታሎግ ከ `/update` ትዕዛዝ ጋር አብረው ይጻፉ።\n\n"
+            "ምሳሌ: `/update 1. የቤት እቃዎች - 5000 ብር`"
+        )
+        return
+
+    try:
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"inventory_data": text_content}).eq("owner_telegram_id", owner_id).execute()
+        )
+        if res.data:
+            await update.effective_message.reply_text("✅ የዕቃ ዝርዝርዎ እና ካታሎግዎ በተሳካ ሁኔታ ተሻሽሏል!")
+            return
+    except Exception as e:
+        logger.error(f"Update error: {e}")
     await update.effective_message.reply_text("⚠️ ምንም ንቁ መደብር አልተገኘም ወይም ስህተት አጋጥሟል።")
 
 
@@ -703,7 +700,6 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                             await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
                 except Exception:
-                    # Silenced transient timeout/network warnings for individual bot webhook health checks
                     pass
 
             updates_needed = {}
@@ -713,63 +709,17 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             if store.get("plan_tier") not in [1, 2, 3]:
                 updates_needed["plan_tier"] = 1
 
-            inv_text = store.get("inventory_data") or ""
-            if async_groq_client and inv_text and len(inv_text) > 10 and "###" not in inv_text and "**" not in inv_text:
-                try:
-                    fix_prompt = (
-                        "Audit this store catalog. Fix spelling/formatting errors and organize into clean Markdown "
-                        "with clear item names, prices in ETB, and descriptions:\n\n" + inv_text
-                    )
-                    comp = await async_groq_client.chat.completions.create(
-                        model="openai/gpt-oss-120b",
-                        messages=[{"role": "user", "content": fix_prompt}],
-                        temperature=0.2
-                    )
-                    updates_needed["inventory_data"] = comp.choices[0].message.content
-                except Exception as ai_err:
-                    logger.error(f"AI catalog audit error: {ai_err}")
-
             if updates_needed:
                 await asyncio.to_thread(
                     lambda u=updates_needed, bt=bot_token: supabase.table("stores").update(u).eq("bot_token", bt).execute()
                 )
                 healed_stores += 1
 
-            try:
-                leads_res = await asyncio.to_thread(
-                    lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).order("updated_at", desc=True).limit(15).execute()
-                )
-                for unanalyzed_lead in (leads_res.data or []):
-                    summary_str = str(unanalyzed_lead.get("interest_summary") or "")
-                    if summary_str.startswith(("[HIGH]", "[MEDIUM]", "[LOW]")):
-                        continue
-
-                    v_id = unanalyzed_lead.get("visitor_telegram_id")
-                    v_name = unanalyzed_lead.get("visitor_name", "Anonymous")
-                    hist_res = await asyncio.to_thread(
-                        lambda bt=bot_token, cid=v_id: supabase.table("chat_history").select("role, content").eq("bot_token", bt).eq("chat_id", cid).order("created_at", desc=True).limit(6).execute()
-                    )
-                    hist = list(reversed(hist_res.data or []))
-                    last_msg = hist[-1]["content"] if hist else summary_str
-                    if last_msg:
-                        await analyze_and_upsert_lead(
-                            bot_token=bot_token,
-                            chat_id=v_id,
-                            visitor_name=v_name,
-                            user_text=last_msg,
-                            history_messages=hist[:-1],
-                            inventory_data=updates_needed.get("inventory_data", inv_text)
-                        )
-                        analyzed_leads += 1
-            except Exception as lead_audit_err:
-                logger.error(f"Lead audit error: {lead_audit_err}")
-
         return (
             f"🛡️ **የAI ሲስተም ፍተሻ እና ራስ-ሰር እርማት ተጠናቋል!**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• የተስተካከሉ ዌብሁኮች (Webhooks): {repaired_webhooks}\n"
-            f"• በ AI የተሻሻሉ እና የተስተካከሉ ቦቶች: {healed_stores}\n"
-            f"• በ AI የተተነተኑ የደንበኞች ውይይቶች: {analyzed_leads}\n"
+            f"• የተስተካከሉ ዌብሁኮች: {repaired_webhooks}\n"
+            f"• የተስተካከሉ ቦቶች: {healed_stores}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"✅ Nexa እና ሁሉም የተገናኙ ቦቶች በትክክል እየሰሩ መሆናቸው ተረጋግጧል።"
         )
@@ -1147,7 +1097,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     ref_id = parsed_result.get("reference_id")
     detected_amount_str = str(parsed_result.get("detected_amount", ""))
 
-    # Check for duplicate/repeated screenshot or reference ID usage
     if ref_id and supabase:
         try:
             dup_check = await asyncio.to_thread(
@@ -1425,7 +1374,6 @@ async def analyze_and_upsert_lead(
         is_vip = bool(structured_data.get("is_high_payer", False))
         vip_prefix = "💎 VIP | " if is_vip else ""
 
-        # Upsert directly using your existing Supabase leads table schema
         lead_payload = {
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
