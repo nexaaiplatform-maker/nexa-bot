@@ -700,10 +700,12 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
         if TELEGRAM_BOT_TOKEN and http_client:
             expected_master_wh = f"{RENDER_EXTERNAL_URL}/webhook"
             try:
-                wh_info = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo")
-                if wh_info.json().get("result", {}).get("url") != expected_master_wh:
-                    await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh})
-                    repaired_webhooks += 1
+                wh_info = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo", timeout=5.0)
+                if wh_info.status_code == 200:
+                    current_wh_url = wh_info.json().get("result", {}).get("url", "")
+                    if current_wh_url != expected_master_wh:
+                        await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh}, timeout=5.0)
+                        repaired_webhooks += 1
             except Exception as master_wh_err:
                 logger.error(f"Master webhook audit error: {master_wh_err}")
 
@@ -721,12 +723,14 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             expected_tenant_wh = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
             if http_client:
                 try:
-                    t_info = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo")
-                    if t_info.json().get("result", {}).get("url") != expected_tenant_wh:
-                        await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh})
-                        repaired_webhooks += 1
+                    t_info = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo", timeout=5.0)
+                    if t_info.status_code == 200:
+                        current_t_wh = t_info.json().get("result", {}).get("url", "")
+                        if current_t_wh != expected_tenant_wh:
+                            await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=5.0)
+                            repaired_webhooks += 1
                 except Exception as wh_err:
-                    logger.error(f"Tenant webhook check error: {wh_err}")
+                    logger.warning(f"Tenant webhook check warning for bot {bot_token[:6]}...: {wh_err}")
 
             updates_needed = {}
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
@@ -758,13 +762,11 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 healed_stores += 1
 
             try:
-                # Query leads without filtering on missing 'ai_analysis' column
                 leads_res = await asyncio.to_thread(
                     lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).order("updated_at", desc=True).limit(15).execute()
                 )
                 for unanalyzed_lead in (leads_res.data or []):
                     summary_str = str(unanalyzed_lead.get("interest_summary") or "")
-                    # Skip leads that have already been tagged with AI intent level
                     if summary_str.startswith(("[HIGH]", "[MEDIUM]", "[LOW]")):
                         continue
 
