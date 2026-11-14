@@ -1083,7 +1083,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if query.data in ["buy_pro", "upgrade"]:
+    if query.data in ["buy_pro", "upgrade", "pay"]:
         await upgrade_command(update, context)
     elif query.data in ["upgrade_tier_1", "tier_pay_1", "tier_1"]:
         await process_tier_upgrade_selection(update, context, 1)
