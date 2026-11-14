@@ -1,4 +1,4 @@
-corrected_code = '''import os
+import os
 import random
 import asyncio
 import httpx
@@ -1188,9 +1188,3 @@ telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
-'''
-
-with open("main.py", "w", encoding="utf-8") as f:
-    f.write(corrected_code)
-
-print("Successfully overwritten main.py with corrected syntax!")
