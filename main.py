@@ -509,14 +509,24 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
 
         full_text = "\n".join(lines)
         if hasattr(message_target, "edit_text"):
-            await message_target.edit_text(full_text, parse_mode="Markdown")
+            try:
+                await message_target.edit_text(full_text, parse_mode="Markdown")
+            except Exception as edit_err:
+                if "Message is not modified" in str(edit_err):
+                    return
+                raise edit_err
         else:
             await message_target.reply_text(full_text, parse_mode="Markdown")
     except Exception as e:
+        if "Message is not modified" in str(e):
+            return
         logger.error(f"Analytics display error: {e}")
         err_msg = f"ስታቲስቲክስ ማምጣት አልተቻለም: {str(e)}"
         if hasattr(message_target, "edit_text"):
-            await message_target.edit_text(err_msg)
+            try:
+                await message_target.edit_text(err_msg)
+            except Exception:
+                pass
         else:
             await message_target.reply_text(err_msg)
 
