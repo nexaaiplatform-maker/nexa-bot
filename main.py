@@ -475,20 +475,21 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
                 high_intent_count += 1
 
         analytics_header = (
-            f"📊 **የAI ስታቲስቲክስ እና ሊድስ ማጠቃለያ — {store_name}**\n"
+            f"📊 **የእርስዎ ቦት ጎብኚዎች እና ስታቲስቲክስ — {store_name}**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• ጠቅላላ የቦት ጎብኚዎች: {total_bot_visitors} ተጠቃሚዎች\n"
+            f"• ጠቅላላ የቦት ጎብኚዎች (Total Visitors): {total_bot_visitors} ተጠቃሚዎች\n"
             f"• ንቁ የውይይት ተሳታፊዎች: {len(leads_data)} ተጠቃሚዎች\n"
             f"• 💎 ከፍተኛ ከፋዮች (VIP High-Payers): {vip_payer_count} ተጠቃሚዎች\n"
             f"• 🔥 ለመግዛት የተዘጋጁ (High-Intent Leads): {high_intent_count} ተጠቃሚዎች\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📋 **በ AI የተተነተነ የደንበኞች ዝርዝር:**\n"
+            f"📋 **በ AI የተተነተነ የደንበኞች እና ስልክ ቁጥሮች ዝርዝር:**\n"
         )
 
         lines = [analytics_header]
         for idx, lead in enumerate(leads_data[:25], start=1):
             name = lead.get("visitor_name") or "ስም ያልታወቀ"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
+            chat_id_val = lead.get("visitor_telegram_id") or "N/A"
             items = lead.get("requested_items") or "አልተለየም"
             summary = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
             budget = float(lead.get("estimated_budget") or 0)
@@ -509,19 +510,21 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
             lines.append(
                 f"**{idx}. የደንበኛ ስም:** {name}\n"
                 f"   📞 **ስልክ ቁጥር:** `{phone}`\n"
+                f"   🆔 **ቴሌግራም ID (Chat ID):** `{chat_id_val}`\n"
                 f"   🛍️ **የፈለገው ዕቃ:** {items}\n"
                 f"   💰 **ግምታዊ በጀት:** {budget_str}\n"
-                f"   📌 **የAI ትንተና:** _{summary}_\n"
+                f"   📌 **የአጠቃላይ ውይይት ማጠቃለያ:** _{summary}_\n"
                 f"   🏷️ **ሁኔታ (Status):** {intent_badge}\n"
                 f"   ──────────────────────────\n"
             )
 
         if not leads_data:
-            lines.append("📭 እስካሁን የተመዘገበ ሊድ የለም።")
+            lines.append("📭 እስካሁን ቦትዎን የጎበኘ ወይም ስልክ ቁጥር የሰጠ ደንበኛ የለም።")
 
         full_text = "\n".join(lines)
         if hasattr(message_target, "edit_text"):
             try:
+                await message_target.edit_key = True
                 await message_target.edit_text(full_text, parse_mode="Markdown")
             except Exception as edit_err:
                 if "Message is not modified" in str(edit_err):
@@ -544,44 +547,59 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
     total_revenue, total_subscribers, total_visitors = 0, 0, 0
-    top_payers = []
+    bot_names_summary = []
 
     if supabase:
         try:
+            stores_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token, store_name").eq("owner_telegram_id", user_id).execute()
+            )
+            bot_tokens = [s["bot_token"] for s in stores_res.data] if stores_res.data else []
+
+            if bot_tokens:
+                vis_res = await asyncio.to_thread(
+                    lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").in_("bot_token", bot_tokens).execute()
+                )
+                total_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
+
+                for store in stores_res.data:
+                    b_token = store["bot_token"]
+                    s_name = store["store_name"]
+                    v_res = await asyncio.to_thread(
+                        lambda bt=b_token: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bt).execute()
+                    )
+                    b_count = v_res.count if v_res.count is not None else len(v_res.data or [])
+                    bot_names_summary.append(f"• የቦት ስም ({s_name}): {b_count} ጎብኚዎች")
+
             rev_res = await asyncio.to_thread(
-                lambda: supabase.table("paid_subscriptions").select("user_id", "amount_etb").execute()
+                lambda: supabase.table("paid_subscriptions").select("user_id", "amount_etb").eq("user_id", user_id).execute()
             )
             if rev_res.data:
                 total_revenue = sum(float(tx["amount_etb"]) for tx in rev_res.data)
                 total_subscribers = len(rev_res.data)
-                payer_totals = {}
-                for tx in rev_res.data:
-                    uid = tx["user_id"]
-                    payer_totals[uid] = payer_totals.get(uid, 0) + float(tx["amount_etb"])
-                top_payers = sorted(payer_totals.items(), key=lambda x: x[1], reverse=True)[:5]
-
-            vis_res = await asyncio.to_thread(
-                lambda: supabase.table("store_visitors").select("user_id", count="exact").execute()
-            )
-            total_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
         except Exception as e:
             logger.error(f"Summary fetch error: {e}")
 
-    top_payers_text = "".join([f"{i}. መለያ {uid} — {amt:,.2f} ብር\n" for i, (uid, amt) in enumerate(top_payers, 1)]) or "እስካሁን ከፋይ የለም።"
+    bots_breakdown = "\n".join(bot_names_summary) or "እስካሁን የተፈጠረ ቦት የለም።"
     summary_text = (
-        f"📊 አጠቃላይ የንግድ እና የጎብኚዎች ማጠቃለያ\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• አጠቃላይ የቦት ጎብኚዎች: {total_visitors} ተጠቃሚዎች\n"
-        f"• የተረጋገጡ ከፋዮች: {total_subscribers} ተጠቃሚዎች\n"
-        f"• አጠቃላይ የተረጋገጠ ገቢ: {total_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n🏆 ከፍተኛ ከፋዮች:\n{top_payers_text}"
+        f"📊 **የእርስዎ ቦቶች እና የጎብኚዎች ማጠቃለያ**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• የሁሉም ቦቶችዎ ጠቅላላ ጎብኚዎች (Total Visitors): {total_visitors} ተጠቃሚዎች\n"
+        f"• የከፈሉባቸው የደንበኝነት ክፍያዎች: {total_subscribers}\n"
+        f"• ያወጡት ጠቅላላ ወጪ / ክፍያ: {total_revenue:,.2f} ብር\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🤖 **በእርስዎ ቦቶች የተመዘገቡ ጎብኚዎች ዝርዝር:**\n"
+        f"{bots_breakdown}"
     )
-    await update.effective_message.reply_text(summary_text)
+    await update.effective_message.reply_text(summary_text, parse_mode="Markdown")
 
 
 async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-    weekly_revenue, weekly_subscribers, tenant_visitors_count = 0, 0, 0
+    weekly_revenue, tenant_visitors_count, leads_this_week = 0, 0, 0
 
     if supabase:
         try:
@@ -599,52 +617,34 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
                         if parse_dt(v.get("created_at")) >= week_ago:
                             tenant_visitors_count += 1
 
+                leads_res = await asyncio.to_thread(
+                    lambda: supabase.table("leads").select("updated_at").in_("bot_token", bot_tokens).execute()
+                )
+                if leads_res.data:
+                    for l in leads_res.data:
+                        if parse_dt(l.get("updated_at")) >= week_ago:
+                            leads_this_week += 1
+
             rev_res = await asyncio.to_thread(
-                lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").execute()
+                lambda: supabase.table("paid_subscriptions").select("amount_etb, created_at").eq("user_id", user_id).execute()
             )
             if rev_res.data:
                 for tx in rev_res.data:
                     if tx.get("created_at") and parse_dt(tx["created_at"]) >= week_ago:
                         weekly_revenue += float(tx["amount_etb"])
-                        weekly_subscribers += 1
         except Exception as e:
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 ሳምንታዊ ሪፖርት (Weekly Summary)\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የደንበኛ ቦቶችዎ ጎብኚዎች (በዚህ ሳምንት): {tenant_visitors_count} ተጠቃሚዎች\n"
-        f"• በዚህ ሳምንት የተመዘገቡ አባላት: {weekly_subscribers} ተጠቃሚዎች\n"
-        f"• የሳምንቱ አጠቃላይ ገቢ: {weekly_revenue:,.2f} ብር\n━━━━━━━━━━━━━━━━━━━━━━\n\n💡 ጠቃሚ ምክር: ሽያጭዎን ለማሳደግ ዕቃዎችዎን በ /update ማሻሻልዎን አይርሱ!"
+        f"📈 **የእርስዎ ቦቶች ሳምንታዊ ሪፖርት (Weekly Summary)**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• ባለፉት 7 ቀናት ቦቶችዎን የጎበኙ ሰዎች: {tenant_visitors_count} ተጠቃሚዎች\n"
+        f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}\n"
+        f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
     )
-    await update.effective_message.reply_text(weekly_text)
-
-
-async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    owner_id = str(update.message.from_user.id)
-    raw_inventory = " ".join(context.args).strip()
-
-    if not raw_inventory:
-        await update.effective_message.reply_text(
-            "⚠️ ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል:\n\n/update ብለው በመቀጠል አዲሱን ዝርዝር ይጻፉ።\nምሳሌ:\n/update ጫማ - 2,800 ብር"
-        )
-        return
-
-    structured_inventory = raw_inventory
-    if async_groq_client:
-        try:
-            prompt = (
-                f"Analyze, validate, and structure this updated store catalog/inventory into a clean, "
-                f"professional format with clear item names, prices in ETB, and descriptions:\n\n{raw_inventory}"
-            )
-            completion = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
-            )
-            structured_inventory = completion.choices[0].message.content
-        except Exception as e:
-            logger.error(f"AI update catalog structuring error: {e}")
-
+    await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
     if supabase:
         try:
             res = await asyncio.to_thread(
