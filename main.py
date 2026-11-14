@@ -323,11 +323,21 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store fetch error: {e}")
 
+    # Generate preview varied amounts for direct USSD links on buttons
+    t1_preview = random.randint(1000, 1100)
+    t2_preview = random.randint(2500, 2600)
+    t3_preview = random.randint(5000, 5100)
+
+    url_make_alive = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_preview}%23"
+    url_tier_1 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t1_preview}%23"
+    url_tier_2 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t2_preview}%23"
+    url_tier_3 = f"tel:*127*2*{TELEBIRR_ACCOUNT_MASKED}*{t3_preview}%23"
+
     keyboard = [
-        [InlineKeyboardButton("🚀 ቦቱን ለአንድ ወር አሰልፍ (Make Alive — 1,000 ብር)", callback_data="upgrade_tier_1")],
-        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="upgrade_tier_1")],
-        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="upgrade_tier_2")],
-        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="upgrade_tier_3")]
+        [InlineKeyboardButton("🚀 ቦቱን ለአንድ ወር አሰልፍ (Make Alive)", url=url_make_alive)],
+        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", url=url_tier_1)],
+        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", url=url_tier_2)],
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", url=url_tier_3)]
     ]
     
     tier_select_text = (
@@ -338,7 +348,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• **Tier 2 (Business Pro - 2,500 ብር)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
         f"• **Tier 3 (Enterprise VIP - 5,000 ብር)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ ወይም የቦት ማግበሪያ ቁልፍ ከታች በመጫን ይምረጡ፡"
+        f"እባክዎ በቀጥታ በቴሌብር USSD ለመክፈል ከታች ያሉትን ቁልፎች ይጫኑ:"
     )
     
     if update.callback_query:
