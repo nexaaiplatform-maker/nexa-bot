@@ -86,8 +86,8 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
-# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN, PAYER_NAME, PAYER_PHONE
-STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN, PAYER_NAME, PAYER_PHONE = range(8)
+# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
+STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 
 
 # -------------------------------------------------------------------
@@ -248,7 +248,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif has_access:
         fomo_hook = ""
         if remaining_days <= 2:
-            fomo_hook = f"\n🔥 **FOMO ALERT:** የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ **{remaining_days} ቀን ብቻ**ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
+            fomo_hook = f"\n🔥 **FOMO ALERT:** የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ **{remaining_days} ቀን ብቻ** ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
         status_text = (
             f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
             f"• የቀረው ጊዜ: **{remaining_days} ቀናት**\n"
@@ -263,7 +263,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
         f"💡 **ለምን ክፍያ መፈጸም ይኖርብዎታል?**\n"
         f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ **Elite Pro Tiers** ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።\n\n"
-        f"📊 **የመለያዎ ሁኔታ:\n{status_text}\n\n"
+        f"📊 **የመለያዎ ሁኔታ:**\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
         "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
@@ -362,8 +362,10 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
-async def process_tier_upgrade_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, tier_num: int):
+async def start_tier_upgrade_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, tier_num: int):
     context.user_data["selected_tier"] = tier_num
+    context.user_data["payment_step"] = "awaiting_payer_name"
+    
     target_msg = update.callback_query.message if update.callback_query else update.effective_message
     if update.callback_query:
         await update.callback_query.answer()
@@ -373,87 +375,6 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
         "እባክዎ ትክክለኛ ስምዎን (Full Name) ይጻፉ (ይህ በ AI-OCR ደረሰኝ ማረጋገጫ ወቅት ይረዳል):",
         parse_mode="Markdown"
     )
-    return PAYER_NAME
-
-
-async def receive_payer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_message.text.strip()
-    context.user_data["payer_name"] = name
-    await update.effective_message.reply_text(
-        "📞 አሁን ደግሞ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number) ያስገቡ (ለምሳሌ: 09... ወይም 07...):",
-        parse_mode="Markdown"
-    )
-    return PAYER_PHONE
-
-
-async def receive_payer_phone_and_generate_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.effective_message.text.strip()
-    context.user_data["payer_phone"] = phone
-    
-    user_id = update.effective_user.id
-    owner_id = str(user_id)
-    tier_num = context.user_data.get("selected_tier", 1)
-    payer_name = context.user_data.get("payer_name", "Valued Customer")
-    
-    store_name = "Nexa Store"
-    if supabase:
-        try:
-            store_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("store_name").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
-            )
-            if store_res.data:
-                store_name = store_res.data[0].get("store_name", "Nexa Store")
-        except Exception as e:
-            logger.error(f"Store fetch error: {e}")
-
-    tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
-    base_price = tier_info["price"]
-    
-    exact_amount_etb = random.randint(base_price, base_price + 100)
-    channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
-    order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
-    
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("pending_orders").upsert({
-                    "user_id": owner_id,
-                    "order_id": order_id,
-                    "amount": str(exact_amount_etb),
-                    "channel": channel_name,
-                    "destination_code": channel_code,
-                    "payer_name": payer_name,
-                    "payer_phone": phone,
-                    "status": "pending_payment"
-                }, on_conflict="user_id").execute()
-            )
-            await asyncio.to_thread(
-                lambda: supabase.table("stores").update({"plan_tier": tier_num}).eq("owner_telegram_id", owner_id).execute()
-            )
-        except Exception as e:
-            logger.error(f"Pending order save error: {e}")
-
-    invoice_text = (
-        f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 ከፋይ: {payer_name} | 📞 `{phone}`\n"
-        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
-        f"• የክፍያ መቀበያ ቁጥር (Telebirr): `{masked_account}`\n"
-        f"• የደረሰኝ ቁጥር: {order_id}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
-        f"1. በስልክዎ የቴሌብር መተግበሪያ በመጠቀም ከላይ ወደተጠቀሰው ቁጥር `{masked_account}` ትክክለኛውን `{exact_amount_etb:,} ብር` ያስተላልፉ።\n"
-        f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) እዚህ ይላኩ።\n"
-        f"3. የ AI-OCR ሲስተሙ ስምዎን፣ ስልክ ቁጥርዎን እና የትራንዛክሽን መጠንዎን አረጋግጦ አካውንትዎን ወዲያውኑ ይከፍትልዎታል።"
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
-        [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
-    ]
-    
-    await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    return ConversationHandler.END
 
 
 async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1056,11 +977,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in ["buy_pro", "upgrade", "pay"]:
         await upgrade_command(update, context)
     elif query.data in ["upgrade_tier_1", "tier_pay_1", "tier_1"]:
-        await process_tier_upgrade_selection(update, context, 1)
+        await start_tier_upgrade_flow(update, context, 1)
     elif query.data in ["upgrade_tier_2", "tier_pay_2", "tier_2"]:
-        await process_tier_upgrade_selection(update, context, 2)
+        await start_tier_upgrade_flow(update, context, 2)
     elif query.data in ["upgrade_tier_3", "tier_pay_3", "tier_3"]:
-        await process_tier_upgrade_selection(update, context, 3)
+        await start_tier_upgrade_flow(update, context, 3)
     elif query.data == "view_summary":
         await summary_command(update, context)
     elif query.data == "view_weekly":
@@ -1213,10 +1134,91 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data and len(context.user_data) > 0:
-        return
     user_text = update.effective_message.text
-    if not user_text or user_text.startswith("/"):
+    if not user_text:
+        return
+
+    # Check if user is in payment upgrade flow (collecting name and phone for OCR)
+    payment_step = context.user_data.get("payment_step")
+    if payment_step == "awaiting_payer_name":
+        context.user_data["payer_name"] = user_text.strip()
+        context.user_data["payment_step"] = "awaiting_payer_phone"
+        await update.effective_message.reply_text(
+            "📞 አሁን ደግሞ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number) ያስገቡ (ለምሳሌ: 09... ወይም 07...):",
+            parse_mode="Markdown"
+        )
+        return
+    elif payment_step == "awaiting_payer_phone":
+        phone = user_text.strip()
+        context.user_data["payer_phone"] = phone
+        context.user_data.pop("payment_step", None)
+        
+        user_id = update.effective_user.id
+        owner_id = str(user_id)
+        tier_num = context.user_data.get("selected_tier", 1)
+        payer_name = context.user_data.get("payer_name", "Valued Customer")
+        
+        store_name = "Nexa Store"
+        if supabase:
+            try:
+                store_res = await asyncio.to_thread(
+                    lambda: supabase.table("stores").select("store_name").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
+                )
+                if store_res.data:
+                    store_name = store_res.data[0].get("store_name", "Nexa Store")
+            except Exception as e:
+                logger.error(f"Store fetch error: {e}")
+
+        tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
+        base_price = tier_info["price"]
+        
+        exact_amount_etb = random.randint(base_price, base_price + 100)
+        channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
+        order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
+        
+        if supabase:
+            try:
+                await asyncio.to_thread(
+                    lambda: supabase.table("pending_orders").upsert({
+                        "user_id": owner_id,
+                        "order_id": order_id,
+                        "amount": str(exact_amount_etb),
+                        "channel": channel_name,
+                        "destination_code": channel_code,
+                        "payer_name": payer_name,
+                        "payer_phone": phone,
+                        "status": "pending_payment"
+                    }, on_conflict="user_id").execute()
+                )
+                await asyncio.to_thread(
+                    lambda: supabase.table("stores").update({"plan_tier": tier_num}).eq("owner_telegram_id", owner_id).execute()
+                )
+            except Exception as e:
+                logger.error(f"Pending order save error: {e}")
+
+        invoice_text = (
+            f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 ከፋይ: {payer_name} | 📞 `{phone}`\n"
+            f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
+            f"• የክፍያ መቀበያ ቁጥር (Telebirr): `{masked_account}`\n"
+            f"• የደረሰኝ ቁጥር: {order_id}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
+            f"1. በስልክዎ የቴሌብር መተግበሪያ በመጠቀም ከላይ ወደተጠቀሰው ቁጥር `{masked_account}` ትክክለኛውን `{exact_amount_etb:,} ብር` ያስተላልፉ።\n"
+            f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) እዚህ ይላኩ።\n"
+            f"3. የ AI-OCR ሲስተሙ ስምዎን፣ ስልክ ቁጥርዎን እና የትራንዛክሽን መጠንዎን አረጋግጦ አካውንትዎን ወዲያውኑ ይከፍትልዎታል።"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
+            [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
+        ]
+        
+        await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    if user_text.startswith("/"):
         return
 
     system_prompt = (
@@ -1648,8 +1650,6 @@ conv_handler = ConversationHandler(
         ],
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
-        PAYER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_payer_name)],
-        PAYER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_payer_phone_and_generate_invoice)],
     },
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
