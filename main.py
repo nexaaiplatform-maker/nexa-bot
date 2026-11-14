@@ -324,19 +324,21 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Store fetch error: {e}")
 
     keyboard = [
+        [InlineKeyboardButton("🚀 ቦቱን ለአንድ ወር አሰልፍ (Make Alive — 1,000 ብር)", callback_data="upgrade_tier_1")],
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="upgrade_tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="upgrade_tier_2")],
         [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="upgrade_tier_3")]
     ]
     
     tier_select_text = (
-        f"⭐ **የፕሮ አባልነት ዕቅድ ማሻሻያ ({store_name})**\n"
+        f"⭐ **የፕሮ አባልነት ዕቅድ ማሻሻያ እና የቦት ማግበሪያ ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **ቦቱን ለአንድ ወር አሰልፍ (Make Alive)**: 1,000 ብር (Starter Tier)\n"
         f"• **Tier 1 (Starter - 1,000 ብር)**: Core AI Sales, Text Catalog, Photo Support, Basic Leads\n"
         f"• **Tier 2 (Business Pro - 2,500 ብር)**: Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes\n"
         f"• **Tier 3 (Enterprise VIP - 5,000 ብር)**: Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ (Tier) ከታች በመጫን ይምረጡ፡"
+        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ ወይም የቦት ማግበሪያ ቁልፍ ከታች በመጫን ይምረጡ፡"
     )
     
     if update.callback_query:
