@@ -397,15 +397,16 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
         f"• የደረሰኝ ቁጥር: {order_id}\n"
         f"• የክፍያ መንገድ: {channel_name}\n"
         f"• የሂሳብ/ስልክ ቁጥር: `{masked_account}`\n"
+        f"• 🔗 [ቀጥተኛ የቴሌብር መክፈያ ሊንክ]({telebirr_ussd_url})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⚠️ **ማሳሰቢያ (Notice):**\n"
-        f"1. ቴሌብር ከሆነ ከታች ያለውን ቀጥተኛ ሊንክ በመጫን ቁጥርዎ እና መጠኑ በራሱ እንዲሞላ ያድርጉ።\n"
+        f"1. ከላይ ያለውን ሊንክ ወይም ከታች ያለውን ቁልፍ በመጫን ቁጥርዎ እና መጠኑ በራሱ እንዲሞላ ያድርጉ።\n"
         f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
         f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል", url=telebirr_ussd_url)],
+        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል (USSD)", url=telebirr_ussd_url)],
         [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
