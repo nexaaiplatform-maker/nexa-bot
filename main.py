@@ -739,17 +739,23 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 healed_stores += 1
 
             try:
+                # Query leads without filtering on missing 'ai_analysis' column
                 leads_res = await asyncio.to_thread(
-                    lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).is_("ai_analysis", "null").limit(15).execute()
+                    lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).order("updated_at", desc=True).limit(15).execute()
                 )
                 for unanalyzed_lead in (leads_res.data or []):
+                    summary_str = str(unanalyzed_lead.get("interest_summary") or "")
+                    # Skip leads that have already been tagged with AI intent level
+                    if summary_str.startswith(("[HIGH]", "[MEDIUM]", "[LOW]")):
+                        continue
+
                     v_id = unanalyzed_lead.get("visitor_telegram_id")
                     v_name = unanalyzed_lead.get("visitor_name", "Anonymous")
                     hist_res = await asyncio.to_thread(
                         lambda bt=bot_token, cid=v_id: supabase.table("chat_history").select("role, content").eq("bot_token", bt).eq("chat_id", cid).order("created_at", desc=True).limit(6).execute()
                     )
                     hist = list(reversed(hist_res.data or []))
-                    last_msg = hist[-1]["content"] if hist else unanalyzed_lead.get("interest_summary", "")
+                    last_msg = hist[-1]["content"] if hist else summary_str
                     if last_msg:
                         await analyze_and_upsert_lead(
                             bot_token=bot_token,
