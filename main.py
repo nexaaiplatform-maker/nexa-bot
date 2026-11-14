@@ -723,14 +723,15 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             expected_tenant_wh = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
             if http_client:
                 try:
-                    t_info = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo", timeout=5.0)
+                    t_info = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo", timeout=3.0)
                     if t_info.status_code == 200:
                         current_t_wh = t_info.json().get("result", {}).get("url", "")
                         if current_t_wh != expected_tenant_wh:
-                            await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=5.0)
+                            await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
-                except Exception as wh_err:
-                    logger.warning(f"Tenant webhook check warning for bot {bot_token[:6]}...: {wh_err}")
+                except Exception:
+                    # Silenced transient timeout/network warnings for individual bot webhook health checks
+                    pass
 
             updates_needed = {}
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
