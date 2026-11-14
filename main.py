@@ -44,9 +44,6 @@ TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
 # 3-Tier Feature & Pricing Matrix
-# Tier 1: Starter (1,000 ETB) — Core AI Assistant + Text Catalog + Photo Support + Basic Leads
-# Tier 2: Business (2,500 ETB) — Advanced AI + Photo Catalogs + Detailed Lead Tracking + Custom Themes
-# Tier 3: Enterprise (5,000 ETB) — Unlimited AI + Full Photo & Video Streaming Support + VIP Concierge + Advanced Analytics
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -326,7 +323,6 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store fetch error: {e}")
 
-    # Interactive 3-Tier Subscription Selector with 100% full feature retention
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="upgrade_tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="upgrade_tier_2")],
@@ -368,7 +364,6 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
     base_price = tier_info["price"]
     
     exact_amount_etb = random.randint(base_price, base_price + 100)
-    
     channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
     order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
     
@@ -629,7 +624,6 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Auto-structure updated inventory with AI before saving
     structured_inventory = raw_inventory
     if async_groq_client:
         try:
@@ -663,12 +657,6 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # AI Self-Healing & Auto-Correction Auditor (Nexa & Connected Bots)
 # -------------------------------------------------------------------
 async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
-    """
-    Audits Nexa Master Bot and all connected tenant bots:
-    1. Verifies & auto-repairs Telegram webhooks.
-    2. Uses AI to detect broken/unstructured store catalogs or invalid themes/tiers and auto-corrects them in Supabase.
-    3. Backfills unanalyzed leads using AI conversation analysis.
-    """
     if not supabase:
         return "⚠️ Supabase connection missing."
 
@@ -677,15 +665,16 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
     analyzed_leads = 0
 
     try:
-        # 1. Verify & Heal Master Bot Webhook
         if TELEGRAM_BOT_TOKEN and http_client:
             expected_master_wh = f"{RENDER_EXTERNAL_URL}/webhook"
-            wh_info = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo")
-            if wh_info.json().get("result", {}).get("url") != expected_master_wh:
-                await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh})
-                repaired_webhooks += 1
+            try:
+                wh_info = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo")
+                if wh_info.json().get("result", {}).get("url") != expected_master_wh:
+                    await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh})
+                    repaired_webhooks += 1
+            except Exception as master_wh_err:
+                logger.error(f"Master webhook audit error: {master_wh_err}")
 
-        # 2. Fetch Stores (All or for specific owner)
         query = supabase.table("stores").select("*")
         if target_owner_id:
             query = query.eq("owner_telegram_id", target_owner_id)
@@ -697,7 +686,6 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             if not bot_token:
                 continue
 
-            # 2a. Verify & Auto-Correct Tenant Bot Webhook
             expected_tenant_wh = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
             if http_client:
                 try:
@@ -708,7 +696,6 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 except Exception as wh_err:
                     logger.error(f"Tenant webhook check error: {wh_err}")
 
-            # 2b. AI Audit & Auto-Correction of Store Settings & Catalog
             updates_needed = {}
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
             if store.get("ui_theme") not in valid_themes:
@@ -738,28 +725,30 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 )
                 healed_stores += 1
 
-            # 2c. Audit & Backfill Unstructured Leads
-            leads_res = await asyncio.to_thread(
-                lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).is_("ai_analysis", "null").limit(15).execute()
-            )
-            for unanalyzed_lead in (leads_res.data or []):
-                v_id = unanalyzed_lead.get("visitor_telegram_id")
-                v_name = unanalyzed_lead.get("visitor_name", "Anonymous")
-                hist_res = await asyncio.to_thread(
-                    lambda bt=bot_token, cid=v_id: supabase.table("chat_history").select("role, content").eq("bot_token", bt).eq("chat_id", cid).order("created_at", desc=True).limit(6).execute()
+            try:
+                leads_res = await asyncio.to_thread(
+                    lambda bt=bot_token: supabase.table("leads").select("*").eq("bot_token", bt).is_("ai_analysis", "null").limit(15).execute()
                 )
-                hist = list(reversed(hist_res.data or []))
-                last_msg = hist[-1]["content"] if hist else unanalyzed_lead.get("interest_summary", "")
-                if last_msg:
-                    await analyze_and_upsert_lead(
-                        bot_token=bot_token,
-                        chat_id=v_id,
-                        visitor_name=v_name,
-                        user_text=last_msg,
-                        history_messages=hist[:-1],
-                        inventory_data=updates_needed.get("inventory_data", inv_text)
+                for unanalyzed_lead in (leads_res.data or []):
+                    v_id = unanalyzed_lead.get("visitor_telegram_id")
+                    v_name = unanalyzed_lead.get("visitor_name", "Anonymous")
+                    hist_res = await asyncio.to_thread(
+                        lambda bt=bot_token, cid=v_id: supabase.table("chat_history").select("role, content").eq("bot_token", bt).eq("chat_id", cid).order("created_at", desc=True).limit(6).execute()
                     )
-                    analyzed_leads += 1
+                    hist = list(reversed(hist_res.data or []))
+                    last_msg = hist[-1]["content"] if hist else unanalyzed_lead.get("interest_summary", "")
+                    if last_msg:
+                        await analyze_and_upsert_lead(
+                            bot_token=bot_token,
+                            chat_id=v_id,
+                            visitor_name=v_name,
+                            user_text=last_msg,
+                            history_messages=hist[:-1],
+                            inventory_data=updates_needed.get("inventory_data", inv_text)
+                        )
+                        analyzed_leads += 1
+            except Exception as lead_audit_err:
+                logger.error(f"Lead audit error: {lead_audit_err}")
 
         return (
             f"🛡️ **የAI ሲስተም ፍተሻ እና ራስ-ሰር እርማት ተጠናቋል!**\n"
@@ -770,6 +759,82 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"✅ Nexa እና ሁሉም የተገናኙ ቦቶች በትክክል እየሰሩ መሆናቸው ተረጋግጧል።"
         )
+    except Exception as e:
+        logger.error(f"System audit error: {e}")
+        return f"⚠️ Audit failed: {str(e)}"
+
+
+async def audit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    await update.effective_message.reply_text("🛡️ AI system audit and self-healing started...")
+    result_text = await run_ai_system_audit_and_heal(target_owner_id=owner_id)
+    await update.effective_message.reply_text(result_text, parse_mode="Markdown")
+
+
+# -------------------------------------------------------------------
+# Conversation Handler Steps for Bot Creation
+# -------------------------------------------------------------------
+async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_msg = update.callback_query.message if update.callback_query else update.effective_message
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    await target_msg.reply_text(
+        "🤖 **새로운 AI ቦት ምዝገባ (Step 1 from 5)**\n\n"
+        "እባክዎ ለንግድዎ ወይም ለመደብርዎ የሚሆን ስም (Store/Business Name) ይጻፉ:",
+        parse_mode="Markdown"
+    )
+    return STORE_NAME
+
+
+async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store_name = update.effective_message.text.strip()
+    context.user_data["store_name"] = store_name
+
+    keyboard = [
+        [InlineKeyboardButton("🛍️ ችርቻሮ እና ግብይት (Retail & E-Commerce)", callback_data="ind_retail")],
+        [InlineKeyboardButton("🏡 ሪል እስቴት እና ቤቶች (Real Estate)", callback_data="ind_realestate")],
+        [InlineKeyboardButton("🍽️ ሆቴል እና ካፌ (Hospitality & Food)", callback_data="ind_hospitality")],
+        [InlineKeyboardButton("⚙️ አገልግሎት እና ቴክኖሎጂ (Services & Tech)", callback_data="ind_services")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.effective_message.reply_text(
+        f"እርምጃ 2 ከ 5: የንግድ ዘርፍዎን (Industry) ይምረጡ:",
+        reply_markup=reply_markup
+    )
+    return INDUSTRY
+
+
+async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    industry = "retail"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        industry = query.data.replace("ind_", "")
+        target_message = query.edit_message_text
+    else:
+        industry = "retail"
+        target_message = update.effective_message.reply_text
+
+    context.user_data["industry"] = industry
+
+    keyboard = [
+        [InlineKeyboardButton("💼 Executive VIP", callback_data="theme_executive")],
+        [InlineKeyboardButton("🎯 Sales Conversion", callback_data="theme_sales")],
+        [InlineKeyboardButton("👋 Friendly & Warm", callback_data="theme_friendly")],
+        [InlineKeyboardButton("⚡ Energetic", callback_data="theme_energetic")],
+        [InlineKeyboardButton("🎯 Minimalist", callback_data="theme_minimalist")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await target_message(
+        "እርምጃ 3 ከ 5: የቦትዎን የውይይት ዘይቤ (UI/UX Theme) ይምረጡ:",
+        reply_markup=reply_markup
+    )
+    return UI_THEME
+
+
 async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chosen_theme = "executive"
     if update.callback_query:
@@ -824,7 +889,6 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_input = update.effective_message.text
-    chat_id = update.effective_chat.id
     
     await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
     
@@ -922,6 +986,59 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
+# -------------------------------------------------------------------
+# Media Upload Handler (/addmedia tag)
+# -------------------------------------------------------------------
+async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    caption = update.message.caption or ""
+    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
+    
+    if not match:
+        return
+
+    item_tag = match.group(1).lower()
+    
+    if supabase:
+        try:
+            stores_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", user_id).execute()
+            )
+            if not stores_res.data:
+                await update.effective_message.reply_text("❌ ምንም ንቁ መደብር አልተገኘም።")
+                return
+
+            bot_token = stores_res.data[0]["bot_token"]
+            
+            file_id = ""
+            media_type = "photo"
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                media_type = "photo"
+            elif update.message.video:
+                file_id = update.message.video.file_id
+                media_type = "video"
+
+            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
+
+            await asyncio.to_thread(
+                lambda: supabase.table("property_media").insert({
+                    "bot_token": bot_token,
+                    "item_tag": item_tag,
+                    "file_id": file_id,
+                    "media_type": media_type,
+                    "caption": clean_caption
+                }).execute()
+            )
+            await update.effective_message.reply_text(f"✅ ሚዲያ በተሳካ ሁኔታ ተመዝግቧል! (Tag: `{item_tag}`)", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Media upload error: {e}")
+            await update.effective_message.reply_text("⚠️ ሚዲያ ማስቀመጥ አልተቻለም።")
+
+
+# -------------------------------------------------------------------
+# Button, Receipt & Master Message Handlers
+# -------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1101,7 +1218,6 @@ async def startup_event():
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
 
-    # Run full AI self-healing audit on startup in background
     asyncio.create_task(run_ai_system_audit_and_heal())
 
 
@@ -1294,7 +1410,6 @@ async def analyze_and_upsert_lead(
                 ).execute()
             )
         except Exception as schema_err:
-            # Graceful fallback if new columns have not been migrated yet
             logger.warning(f"Extended leads upsert failed, falling back to core columns: {schema_err}")
             fallback_lead = {
                 "bot_token": bot_token,
@@ -1420,7 +1535,6 @@ async def store_chat_webhook(payload: dict):
         except Exception as e:
             logger.error(f"Chat history insert error: {e}")
 
-    # Analyze conversation one-by-one and push structured intelligence to Supabase
     asyncio.create_task(
         analyze_and_upsert_lead(
             bot_token=bot_token,
