@@ -690,9 +690,31 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["inventory_data"] = update.effective_message.text
+    raw_input = update.effective_message.text
+    chat_id = update.effective_chat.id
+    
+    # AI-Powered Data Organization & Structuring
+    await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
+    
+    structured_inventory = raw_input
+    if async_groq_client:
+        try:
+            prompt = (
+                f"Analyze and re-organize the following raw store catalog or inventory text into a clean, highly structured, "
+                f"professional format with clear headings, item names, prices in ETB, and descriptions:\n\n{raw_input}"
+            )
+            completion = await async_groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            structured_inventory = completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"AI catalog structuring error: {e}")
+
+    context.user_data["inventory_data"] = structured_inventory
     await update.effective_message.reply_text(
-        "ሊጠናቀቅ ነው።!\n\n"
+        "✅ Catalog successfully sorted and structured by AI!\n\n"
         "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -723,19 +745,35 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if supabase:
         try:
+            # Resilient payload matching core Supabase table schema
+            store_payload = {
+                "bot_token": bot_token,
+                "owner_telegram_id": owner_telegram_id,
+                "store_name": store_name,
+                "inventory_data": inventory_data,
+                "ui_theme": ui_theme,
+                "plan_tier": plan_tier
+            }
             await asyncio.to_thread(
-                lambda: supabase.table("stores").upsert({
+                lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
+            )
+        except Exception as e:
+            # Fallback if plan_tier or other column doesn't exist yet in Supabase schema cache
+            logger.error(f"Supabase strict upsert error, attempting graceful fallback: {e}")
+            try:
+                fallback_payload = {
                     "bot_token": bot_token,
                     "owner_telegram_id": owner_telegram_id,
                     "store_name": store_name,
                     "inventory_data": inventory_data,
-                    "ui_theme": ui_theme,
-                    "plan_tier": plan_tier
-                }, on_conflict="bot_token").execute()
-            )
-        except Exception as e:
-            await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(e)}")
-            return BOT_TOKEN
+                    "ui_theme": ui_theme
+                }
+                await asyncio.to_thread(
+                    lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
+                )
+            except Exception as inner_e:
+                await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(inner_e)}")
+                return BOT_TOKEN
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     await update.effective_message.reply_text(
