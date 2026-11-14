@@ -1391,14 +1391,18 @@ async def analyze_and_upsert_lead(
             phone_match = re.search(r"(\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
             phone = phone_match.group(0) if phone_match else None
 
+        intent_lvl = str(structured_data.get("intent_level", "low")).lower()
+        action_summary = structured_data.get("action_summary") or user_text[:100]
+
+        # First attempt: save with full schema columns including ai_analysis
         lead_payload = {
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
             "visitor_name": structured_data.get("customer_name") or visitor_name,
-            "interest_summary": structured_data.get("action_summary") or user_text[:100],
+            "interest_summary": action_summary,
             "requested_items": structured_data.get("requested_items"),
             "estimated_budget": float(structured_data.get("estimated_budget") or 0),
-            "intent_level": str(structured_data.get("intent_level", "low")).lower(),
+            "intent_level": intent_lvl,
             "is_high_payer": bool(structured_data.get("is_high_payer", False)),
             "ai_analysis": structured_data,
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -1413,12 +1417,13 @@ async def analyze_and_upsert_lead(
                 ).execute()
             )
         except Exception as schema_err:
-            logger.warning(f"Extended leads upsert failed, falling back to core columns: {schema_err}")
+            # Fallback for Supabase tables lacking extra JSON/boolean columns (e.g., ai_analysis)
+            logger.warning(f"Extended leads schema missing columns, falling back to core schema: {schema_err}")
             fallback_lead = {
                 "bot_token": bot_token,
                 "visitor_telegram_id": str(chat_id),
                 "visitor_name": lead_payload["visitor_name"],
-                "interest_summary": f"[{lead_payload['intent_level'].upper()}] {lead_payload['interest_summary']}",
+                "interest_summary": f"[{intent_lvl.upper()}] {action_summary}",
                 "updated_at": lead_payload["updated_at"]
             }
             if phone:
