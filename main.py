@@ -327,12 +327,11 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier_select_text = (
         f"⭐ **የፕሮ አባልነት ዕቅድ ይምረጡ ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• **Tier 1 (Starter)**: 1,000 ብር / ወር — Core AI Sales, Text Catalog, Photo Support\n"
-        f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር — Advanced AI, Photo Catalogs, Lead Tracking\n"
-        f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር — Unlimited AI, Video Streaming, VIP Analytics\n"
+        f"• **Tier 1 (Starter)**: 1,000 ብር / ወር\n"
+        f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር\n"
+        f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💳 **የቴሌብር ቁጥር:** `{TELEBIRR_ACCOUNT_MASKED}`\n\n"
-        f"እባክዎ ማሻሻል የሚፈልጉትን የዕቅድ ደረጃ (Tier) ከታች በመጫን ቀጥተኛ የቴሌብር መክፈያ ሊንክ ያግኙ:"
+        f"እባክዎ ክፍያ ለመፈጸም ከታች ካሉት ዕቅዶች አንዱን ይምረጡ:"
     )
     
     keyboard = [
@@ -390,27 +389,23 @@ async def process_tier_upgrade_selection(update: Update, context: ContextTypes.D
         except Exception as e:
             logger.error(f"Pending order save error: {e}")
     
-    # Exact USSD dialer link format: *127*2*0965205354*amount#
     telebirr_ussd_url = f"tel:*127*2*{masked_account}*{exact_amount_etb}%23"
 
     invoice_text = (
-        f"⭐ **ክፍያ ማረጋገጫ — {tier_info['name']} ({store_name})**\n"
+        f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር** (Varied)\n"
+        f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
+        f"• የክፍያ መቀበያ ቁጥር: `{masked_account}`\n"
         f"• የደረሰኝ ቁጥር: {order_id}\n"
-        f"• የቴሌብር ቁጥር: `{masked_account}` 📱\n"
-        f"• USSD ትዕዛዝ: `*127*2*{masked_account}*{exact_amount_etb}#`\n"
-        f"• 🔗 [ስልክ ላይ በራሱ እንዲደውል እዚህ ይጫኑ]({telebirr_ussd_url})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚠️ **ማሳሰቢያ (Notice):**\n"
-        f"1. ከላይ ያለውን ሊንክ ሲጫኑ ስልክዎ ላይ `*127*2*{masked_account}*{exact_amount_etb}#` በቀጥታ ተሞልቶ ይከፈታል።\n"
-        f"2. የባለቤቱን ፓስወርድ (PIN) ብቻ አስገብተው ክፍያውን ያረጋግጡ።\n"
-        f"3. ክፍያውን እንደፈጸሙ የክፍያውን ቅጽበት (Screenshot) እዚህ በመላክ AI-OCR ማረጋገጫ ያድርጉ።"
+        f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
+        f"1. በስልክዎ `*127*2*{masked_account}*{exact_amount_etb}#` በመደወል ወይም ከታች ያለውን ሊንክ በመጠቀም ክፍያውን ይፈጽሙ።\n"
+        f"2. ከፍሎ ሲጨርስ የሚመጣውን የቴሌብር የግብይት ቁጥር (Transaction ID) ወይም የደረሰኝ ቅጽበት (Screenshot) እዚህ ይላኩ።\n"
+        f"3. አስተዳዳሪው በግብይት ቁጥሩ ያረጋግጥልዎታል።"
     )
     
     keyboard = [
-        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል (USSD)", url=telebirr_ussd_url)],
+        [InlineKeyboardButton("💳 በቴሌብር በቀጥታ ለመክፈል", url=telebirr_ussd_url)],
         [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
         [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
     ]
@@ -1115,7 +1110,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error(f"Fetch pending order error: {e}")
     
     if not order:
-        await update.effective_message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ይጠቀሙ።")
+        await update.effective_message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ወይም /pay ይጠቀሙ።")
         return
 
     photo_file = await update.message.photo[-1].get_file()
@@ -1152,6 +1147,21 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     ref_id = parsed_result.get("reference_id")
     detected_amount_str = str(parsed_result.get("detected_amount", ""))
 
+    # Check for duplicate/repeated screenshot or reference ID usage
+    if ref_id and supabase:
+        try:
+            dup_check = await asyncio.to_thread(
+                lambda: supabase.table("processed_receipts").select("*").eq("reference_id", ref_id).execute()
+            )
+            if dup_check.data:
+                await update.effective_message.reply_text(
+                    "⚠️ **ይህ የክፍያ ደረሰኝ (Screenshot / Reference ID) ከዚህ በፊት ጥቅም ላይ ውሏል!**\n\n"
+                    "እባክዎ አዲስ እና ትክክለኛ የክፍያ ደረሰኝ Screenshot በድጋሚ ይላኩ።"
+                )
+                return
+        except Exception as dup_err:
+            logger.error(f"Duplicate receipt check error: {dup_err}")
+
     try:
         clean_expected = float(expected_amount_str.replace(",", "").replace("ብር", "").strip())
         clean_detected = float(detected_amount_str.replace(",", "").replace("ብር", "").strip())
@@ -1177,14 +1187,17 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
-        await update.effective_message.reply_text(f"✅ ክፍያው ተረጋግጧል እና ፕሮ አባልነት ተከፍቷል! ⭐🇪🇹\n• የግብይት መለያ: {ref_id}")
+        await update.effective_message.reply_text(f"✅ ክፍያው በ AI-OCR ተረጋግጧል እና ፕሮ አባልነትዎ በቅጽበት ገብቷል! ⭐🇪🇹\n• የግብይት መለያ: `{ref_id}`", parse_mode="Markdown")
     else:
         if ADMIN_TELEGRAM_ID:
             try:
                 await context.bot.forward_message(chat_id=ADMIN_TELEGRAM_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
             except Exception:
                 pass
-        await update.effective_message.reply_text("📥 ደረሰኙ ለግምገማ ተመዝግቧል አስተዳዳሪው ያረጋግጥለታል።")
+        await update.effective_message.reply_text(
+            "⚠️ በ AI-OCR የክፍያውን መጠን ወይም የግብይት መለያ ማረጋገጥ አልተቻለም።\n\n"
+            "እባክዎ ትክክለኛውን የቴሌብር SMS ፎቶ (Screenshot) በግልጽ እንደገና ይላኩ ወይም የግብይት ቁጥሩን በጽሁፍ ይጻፉ።"
+        )
 
 
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
