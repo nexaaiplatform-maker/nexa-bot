@@ -47,7 +47,7 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
-# 3-Tier Feature & Pricing Matrix (Elite Upgrade Descriptions)
+# 4-Tier Feature & Pricing Matrix (Elite Upgrade Descriptions including AI Voice Concierge)
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -295,7 +295,6 @@ async def admin_dashboard(pwd: str = ""):
         </html>
         """
 
-    # Fetch Data from Supabase with Subscription Mapping
     manual_reviews, stores_data, subs_data, leads_data = [], [], [], []
     if supabase:
         try:
@@ -315,7 +314,6 @@ async def admin_dashboard(pwd: str = ""):
     subs_map = {str(s["user_id"]): s for s in subs_data}
     now = datetime.now(timezone.utc)
 
-    # Render HTML Rows
     reviews_html = ""
     for r in manual_reviews:
         img_url = f"/admin/receipt/{r['screenshot_file_id']}?pwd={pwd}" if r.get("screenshot_file_id") else ""
@@ -404,7 +402,6 @@ async def admin_dashboard(pwd: str = ""):
         </header>
 
         <main class="max-w-7xl mx-auto p-6 space-y-8">
-            <!-- Broadcast Section -->
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-2 flex items-center gap-2"><span>📢</span> Broadcast Feature Update / Notice to All Nexa Bot Owners</h3>
                 <p class="text-slate-400 text-sm mb-4">Send instant direct telegram notifications to all active store owners on your platform.</p>
@@ -415,7 +412,6 @@ async def admin_dashboard(pwd: str = ""):
                 </form>
             </section>
 
-            <!-- Payment Reviews Section -->
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>💳</span> Telebirr Payment Review & Mismatch Queue</h3>
                 <div class="overflow-x-auto">
@@ -428,7 +424,6 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </section>
 
-            <!-- Nexa Users & Stores Status Section -->
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>🤖</span> Connected Nexa Bot Owners & Stores ({len(stores_data)})</h3>
                 <div class="overflow-x-auto">
@@ -441,7 +436,6 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </section>
 
-            <!-- Customer Inquiries & Leads Section -->
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>💬</span> Live Customer Questions & Leads ({len(leads_data)})</h3>
                 <div class="overflow-x-auto">
@@ -1150,7 +1144,7 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
             if store.get("ui_theme") not in valid_themes:
                 updates_needed["ui_theme"] = "executive"
-            if store.get("plan_tier") not in [1, 2, 3]:
+            if store.get("plan_tier") not in [1, 2, 3, 4]:
                 updates_needed["plan_tier"] = 1
 
             if updates_needed:
@@ -1375,14 +1369,89 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.to_thread(
                     lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
                 )
+            except Exception as inner_e:
+                await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(inner_e)}")
+                return BOT_TOKEN
+
+    tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+    cool_advert_text = (
+        f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**\n\n"
+        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
+        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!\n"
+        f"• የተመረጠው ደረጃ: {tier_info['name']}\n"
+        f"• ታላቅ ማስታወሻ: ቀጣይ ደንበኞችዎ አሁን በ 24/7 በራስ-ሰር ይስተናገዳሉ።\n\n"
+        f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን አሻሽለው Elite Features ማግኘት ይችላሉ!"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🚀 አባልነት አሻሽል (Upgrade / Pay)", callback_data="buy_pro")],
+        [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
+    ]
+    
+    await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("❌ ምዝገባው ተሰርዟል። ዝግጁ ሲሆኑ /register ይጠቀሙ።")
+    return ConversationHandler.END
+
+
+# -------------------------------------------------------------------
+# Media Upload Handler (/addmedia tag)
+# -------------------------------------------------------------------
+async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    caption = update.message.caption or ""
+    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
+    
+    if not match:
+        return
+
+    item_tag = match.group(1).lower()
+    
+    if supabase:
+        try:
+            stores_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", user_id).execute()
+            )
+            if not stores_res.data:
+                await update.effective_message.reply_text("❌ ምንም ንቁ መደብር አልተገኘም።")
+                return
+
+            bot_token = stores_res.data[0]["bot_token"]
+            
+            file_id = ""
+            media_type = "photo"
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                media_type = "photo"
+            elif update.message.video:
+                file_id = update.message.video.file_id
+                media_type = "video"
+
+            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
+
+            await asyncio.to_thread(
+                lambda: supabase.table("property_media").insert({
+                    "bot_token": bot_token,
+                    "item_tag": item_tag,
+                    "file_id": file_id,
+                    "media_type": media_type,
+                    "caption": clean_caption
+                }).execute()
+            )
+            await update.effective_message.reply_text(f"✅ ሚዲያ በተሳካ ሁኔታ ተመዝግቧል! (Tag: `{item_tag}`)", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Media upload error: {e}")
+            await update.effective_message.reply_text("⚠️ ሚዲያ ማስቀመጥ አልተቻለም።")
+
+
+# -------------------------------------------------------------------
+# Tier 4 AI Voice Call Receptionist Endpoint
+# -------------------------------------------------------------------
 @app.post("/api/voice-call-webhook/{bot_token}")
 async def ai_voice_call_webhook(bot_token: str, request: Request):
-    """
-    Tier 4 AI Voice Call Receptionist endpoint.
-    Compatible with free/low-cost telephony gateways (like Twilio, Exotel, or Webhook-based SIP trunks)
-    where inbound caller speech is transcribed to text, processed by Groq AI using the store's inventory,
-    and returned as TwiML / JSON speech for real-time voice response.
-    """
     data = await request.json()
     caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
     spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
@@ -1429,7 +1498,6 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
         except Exception as e:
             logger.error(f"Voice AI generation error: {e}")
             
-    # Record lead from phone call
     if supabase and caller_phone:
         try:
             await asyncio.to_thread(
@@ -1454,6 +1522,9 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     }
 
 
+# -------------------------------------------------------------------
+# Button, Receipt & Master Message Handlers
+# -------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
