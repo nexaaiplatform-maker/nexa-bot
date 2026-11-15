@@ -412,12 +412,8 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_store_leads_and_analytics(message_target, bot_token: str, store_name: str):
     try:
         vis_res, leads_res = await asyncio.gather(
-            asyncio.to_thread(
-                lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bot_token).execute()
-            ),
-            asyncio.to_thread(
-                lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute()
-            )
+            asyncio.to_thread(lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bot_token).execute()),
+            asyncio.to_thread(lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute())
         )
         total_bot_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
         leads_data = leads_res.data or []
@@ -446,8 +442,7 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
 
         lines = [analytics_header]
         for idx, lead in enumerate(leads_data[:25], start=1):
-            raw_name = str(lead.get("visitor_name") or "").strip()
-            name = raw_name if raw_name and raw_name.lower() not in ["anonymous", "none", "null", "unknown"] else f"ደንበኛ #{lead.get('visitor_telegram_id', idx)}"
+            name = lead.get("visitor_name") or "ስም ያልታወቀ"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
             chat_id_val = lead.get("visitor_telegram_id") or "N/A"
             summary = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
@@ -661,9 +656,6 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                         if current_t_wh != expected_tenant_wh:
                             await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
-                    elif t_info.status_code == 401:
-                        # Silently pass expired/revoked bot tokens without cluttering warning logs
-                        pass
                 except Exception:
                     pass
 
@@ -1230,9 +1222,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
         "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade). "
-        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
         "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
-        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
+        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞችን ስልክ ቁጥር ለማየት /leads፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
@@ -1294,22 +1285,29 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     data = await request.json()
     
     message = data.get("message", {})
-    chat_obj = message.get("chat", {})
-    chat_id = chat_obj.get("id")
+    chat_id = message.get("chat", {}).get("id")
     user_text = message.get("text", "")
     user_obj = message.get("from", {})
-    full_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip()
-    if not full_name:
-        full_name = f"{chat_obj.get('first_name', '')} {chat_obj.get('last_name', '')}".strip()
-    username = user_obj.get("username") or chat_obj.get("username")
-    if full_name and username:
-        visitor_name = f"{full_name} (@{username})"
-    elif full_name:
-        visitor_name = full_name
+    
+    first = user_obj.get('first_name', '')
+    last = user_obj.get('last_name', '')
+    username = user_obj.get('username', '')
+    
+    if first or last:
+        visitor_name = f"{first} {last}".strip()
     elif username:
         visitor_name = f"@{username}"
     else:
-        visitor_name = f"User {chat_id}"
+        chat_obj = message.get("chat", {})
+        c_first = chat_obj.get('first_name', '')
+        c_last = chat_obj.get('last_name', '')
+        c_user = chat_obj.get('username', '')
+        if c_first or c_last:
+            visitor_name = f"{c_first} {c_last}".strip()
+        elif c_user:
+            visitor_name = f"@{c_user}"
+        else:
+            visitor_name = "Anonymous Customer"
     
     if not chat_id or not user_text:
         return {"ok": True}
@@ -1329,7 +1327,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         return {"ok": True}
 
-    # Verify if store owner's 3-day trial has expired and payment not made -> Stop AI response
     owner_id = store.get("owner_telegram_id")
     if owner_id:
         try:
@@ -1344,28 +1341,29 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             logger.error(f"Tenant trial check error: {sub_check_err}")
 
     if supabase:
-        async def _record_visitor_and_lead():
-            try:
-                await asyncio.gather(
-                    asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
-                        "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
-                    }, on_conflict="bot_token,chat_id").execute()),
-                    asyncio.to_thread(lambda: supabase.table("leads").upsert({
-                        "bot_token": bot_token,
-                        "visitor_telegram_id": str(chat_id),
-                        "visitor_name": visitor_name,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }, on_conflict="bot_token,visitor_telegram_id").execute())
-                )
-            except Exception as e:
-                logger.error(f"Visitor/Lead record error: {e}")
-        asyncio.create_task(_record_visitor_and_lead())
+        try:
+            asyncio.create_task(asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
+                "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
+            }, on_conflict="bot_token,chat_id").execute()))
+            
+            asyncio.create_task(asyncio.to_thread(lambda: supabase.table("leads").upsert({
+                "bot_token": bot_token,
+                "visitor_telegram_id": str(chat_id),
+                "visitor_name": visitor_name,
+                "interest_summary": "Active Chat Visitor",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }, on_conflict="bot_token,visitor_telegram_id").execute()))
+        except Exception as e:
+            logger.error(f"Visitor record error: {e}")
 
     if user_text == "/start":
         if supabase:
-            asyncio.create_task(asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
-                "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
-            }, on_conflict="chat_id,bot_token").execute()))
+            try:
+                asyncio.create_task(asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
+                    "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
+                }, on_conflict="chat_id,bot_token").execute()))
+            except Exception:
+                pass
 
         ui_theme = store.get("ui_theme", "executive")
         theme_intros = {
@@ -1389,13 +1387,15 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     customer_lang = "amharic"
     history_messages = []
     available_tags = []
+
     if supabase:
         try:
-            lang_res, hist_res, media_res = await asyncio.gather(
-                asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute()),
-                asyncio.to_thread(lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).order("created_at", desc=True).limit(6).execute()),
-                asyncio.to_thread(lambda: supabase.table("property_media").select("item_tag, caption").eq("bot_token", bot_token).execute())
-            )
+            lang_task = asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute())
+            hist_task = asyncio.to_thread(lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).order("created_at", desc=True).limit(6).execute())
+            media_task = asyncio.to_thread(lambda: supabase.table("property_media").select("item_tag, caption").eq("bot_token", bot_token).execute())
+            
+            lang_res, hist_res, media_res = await asyncio.gather(lang_task, hist_task, media_task)
+            
             if lang_res.data:
                 customer_lang = lang_res.data[0]["language"]
             if hist_res.data:
@@ -1434,24 +1434,28 @@ async def analyze_and_upsert_lead(
     convo_text = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
     convo_text += f"\nuser: {user_text}"
 
-    analysis_prompt = f"""
+    analysis_prompt = """
     Analyze this customer conversation one-by-one for a business store and extract structured lead intelligence.
-    Store Catalog Reference: {inventory_data[:1200]}
+    Store Catalog Reference: {inventory_ref}
     
     Conversation:
-    {convo_text}
+    {conversation}
     
     Return strictly valid JSON with these exact keys:
     {{
-        "customer_name": "extracted real name or '{visitor_name}'",
+        "customer_name": "extracted real name or '{fallback_name}'",
         "phone_number": "extracted Ethiopian phone (+251... or 09.../07...) or null",
         "requested_items": "concise summary of specific products/services they want",
         "estimated_budget": 0,
         "intent_level": "high" or "medium" or "low",
-        "is_high_payer": true or false (true if asking about bulk orders, high-ticket/premium items, or showing readiness to pay substantial amounts),
+        "is_high_payer": true or false,
         "action_summary": "1-sentence Amharic summary of the customer's exact need and next step"
     }}
-    """
+    """.format(
+        inventory_ref=inventory_data[:1200],
+        conversation=convo_text,
+        fallback_name=visitor_name
+    )
 
     try:
         res = await async_groq_client.chat.completions.create(
@@ -1471,17 +1475,13 @@ async def analyze_and_upsert_lead(
         action_summary = structured_data.get("action_summary") or user_text[:100]
         is_vip = bool(structured_data.get("is_high_payer", False))
         vip_prefix = "💎 VIP | " if is_vip else ""
-
-        extracted_name = str(structured_data.get("customer_name") or "").strip()
-        if not extracted_name or extracted_name.lower() in ["anonymous", "unknown", "none", "null", "user"]:
-            final_visitor_name = visitor_name
-        else:
-            final_visitor_name = extracted_name
+        extracted_name = structured_data.get("customer_name")
+        final_name = extracted_name if (extracted_name and extracted_name != "Anonymous" and not extracted_name.startswith("extracted")) else visitor_name
 
         lead_payload = {
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
-            "visitor_name": final_visitor_name,
+            "visitor_name": final_name,
             "interest_summary": f"[{intent_lvl.upper()}] {vip_prefix}{action_summary}",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
@@ -1515,6 +1515,7 @@ async def store_chat_webhook(payload: dict):
     if owner_telegram_id:
         try:
             owner_id_int = int(owner_telegram_id)
+            await get_or_create_user_subscription(owner_id_int)
             if not await verify_active_access(owner_id_int):
                 await http_client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
@@ -1529,6 +1530,11 @@ async def store_chat_webhook(payload: dict):
         f"https://api.telegram.org/bot{bot_token}/sendChatAction",
         json={"chat_id": chat_id, "action": "typing"}
     ))
+
+    lang_instructions = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
+        "english": "Respond in English.",
+        "oromo": "Afaan Oromootiin deebisi."
     }
 
     theme_prompts = {
@@ -1550,8 +1556,7 @@ async def store_chat_webhook(payload: dict):
     
     Core Directives & Analytical Approach:
     - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
-    - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
-    - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
+    - Provide smart, flexible, and well-reasoned answers in pure, flawless Amharic. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
     - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
     - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
     
@@ -1584,17 +1589,16 @@ async def store_chat_webhook(payload: dict):
     clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
 
     if supabase:
-        async def _save_chat_history():
-            try:
-                now_user = datetime.now(timezone.utc)
-                now_assistant = now_user + timedelta(milliseconds=500)
-                await asyncio.to_thread(lambda: supabase.table("chat_history").insert([
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()},
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()}
-                ]).execute())
-            except Exception as e:
-                logger.error(f"Chat history insert error: {e}")
-        asyncio.create_task(_save_chat_history())
+        try:
+            now_user = datetime.now(timezone.utc)
+            now_assistant = now_user + timedelta(milliseconds=500)
+            
+            asyncio.create_task(asyncio.to_thread(lambda: supabase.table("chat_history").insert([
+                {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()},
+                {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()}
+            ]).execute()))
+        except Exception as e:
+            logger.error(f"Chat history insert error: {e}")
 
     asyncio.create_task(
         analyze_and_upsert_lead(
