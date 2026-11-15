@@ -1,5 +1,27 @@
-from fastapi.responses import HTMLResponse
-from fastapi import Form, Response, Cookie
+import os
+import re
+import json
+import base64
+import random
+import asyncio
+import logging
+from datetime import datetime, timezone, timedelta
+
+import httpx
+from fastapi import FastAPI, Request, HTTPException, Form, Response, Cookie
+from fastapi.responses import HTMLResponse, RedirectResponse
+from supabase import create_client, Client
+from groq import AsyncGroq
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
+)
 
 ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##")
 
@@ -85,47 +107,109 @@ async def admin_dashboard(pwd: str = ""):
             <title>Nexa AI Elite Admin Login</title>
             <script src="https://cdn.tailwindcss.com"></script>
         </head>
-        <body class="bg-slate-950 text-slate-100 flex items-center justify-center h-screen">
+        <body class="bg-slate-950 text-slate-100 flex items-center justify-center h-screen" oncontextmenu="return false;" onselectstart="return false;" ondragstart="return false;">
             <div class="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md text-center">
                 <div class="inline-flex bg-blue-600/20 text-blue-400 p-4 rounded-full mb-4 text-2xl font-bold">💎</div>
                 <h2 class="text-2xl font-black mb-2 tracking-tight">Nexa AI Elite Control</h2>
-                <p class="text-slate-400 text-sm mb-6">Secure Administrator Authentication</p>
+                <p class="text-slate-400 text-xs uppercase tracking-widest font-semibold mb-6">Option 1: Password or Option 2: Fingerprint</p>
+                
                 <form method="get" action="/admin" class="space-y-4">
-                    <input type="password" name="pwd" placeholder="Enter Admin Password" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" required />
-                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition duration-200 shadow-lg shadow-blue-600/30">Secure Login</button>
+                    <input type="password" name="pwd" placeholder="Option 1: Enter Master Admin Password" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" required />
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition duration-200 shadow-lg shadow-blue-600/30 text-sm">Secure Login with Password</button>
                 </form>
-                <button onclick="tryBiometricLogin()" class="mt-4 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2.5 rounded-xl transition text-sm flex items-center justify-center gap-2">
-                    <span>🧬</span> Quick Biometric Unlock (Passkey)
-                </button>
+
+                <div class="relative flex py-3 items-center">
+                    <div class="flex-grow border-t border-slate-800"></div>
+                    <span class="flex-shrink mx-4 text-slate-500 text-xs uppercase font-semibold">Or</span>
+                    <div class="flex-grow border-t border-slate-800"></div>
+                </div>
+
+                <div id="bio-register-box" class="hidden">
+                    <p class="text-xs text-amber-400 mb-2">⚠️ No fingerprint registered yet on this device.</p>
+                    <button onclick="registerBiometricsFirst()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-xl transition text-xs flex items-center justify-center gap-2">
+                        <span>🧬</span> Register My Fingerprint Passkey Now
+                    </button>
+                </div>
+
+                <div id="bio-login-box" class="hidden">
+                    <button onclick="tryBiometricLogin()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-3 rounded-xl transition text-xs flex items-center justify-center gap-2 border border-slate-700">
+                        <span>🧬</span> Option 2: Unlock with My Fingerprint
+                    </button>
+                </div>
+
+                <div id="bio-status" class="hidden mt-3 bg-blue-600/10 border border-blue-500/30 text-blue-300 p-2.5 rounded-xl text-xs">
+                    👆 Touch your fingerprint sensor now...
+                </div>
             </div>
             <script>
-                async fn = async () => {{
-                    if (localStorage.getItem("nexa_bio_unlocked") === "true") {{
-                        window.location.href = "/admin?pwd=" + encodeURIComponent("{ADMIN_PANEL_PASSWORD}");
-                    }}
-                }};
-                fn();
-                async function tryBiometricLogin() {{
-                    try {{
-                        if (!window.PublicKeyCredential) {{
+                window.addEventListener("DOMContentLoaded", () => {
+                    const isRegistered = localStorage.getItem("nexa_bio_registered") === "true";
+                    if (!isRegistered) {
+                        document.getElementById("bio-register-box").classList.remove("hidden");
+                    } else {
+                        document.getElementById("bio-login-box").classList.remove("hidden");
+                    }
+                });
+
+                async function registerBiometricsFirst() {
+                    const statusEl = document.getElementById("bio-status");
+                    try {
+                        if (!window.PublicKeyCredential) {
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }}
-                        const credential = await navigator.credentials.get({{
-                            publicKey: {{
-                                challenge: new Uint8Array([21,31,105,48,24,6,12,14,99]),
+                        }
+                        statusEl.classList.remove("hidden");
+                        const newCredential = await navigator.credentials.create({
+                            publicKey: {
+                                challenge: window.crypto.getRandomValues(new Uint8Array(32)),
+                                rp: { name: "Nexa AI Elite Admin" },
+                                user: {
+                                    id: new Uint8Array([79, 115, 115, 101, 97, 114]),
+                                    name: "admin@nexa.ai",
+                                    displayName: "Elite Admin"
+                                },
+                                pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+                                authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+                                timeout: 60000
+                            }
+                        });
+                        statusEl.classList.add("hidden");
+                        if (newCredential) {
+                            localStorage.setItem("nexa_bio_registered", "true");
+                            document.getElementById("bio-register-box").classList.add("hidden");
+                            document.getElementById("bio-login-box").classList.remove("hidden");
+                            alert("Fingerprint registered! Click Option 2 to unlock.");
+                        }
+                    } catch (e) {
+                        statusEl.classList.add("hidden");
+                        alert("Biometric registration failed or canceled. Use Option 1 (Password).");
+                    }
+                }
+
+                async function tryBiometricLogin() {
+                    const statusEl = document.getElementById("bio-status");
+                    try {
+                        if (!window.PublicKeyCredential) {
+                            alert("Biometrics / WebAuthn not supported on this browser.");
+                            return;
+                        }
+                        statusEl.classList.remove("hidden");
+                        const credential = await navigator.credentials.get({
+                            publicKey: {
+                                challenge: window.crypto.getRandomValues(new Uint8Array(32)),
                                 timeout: 60000,
                                 userVerification: "required"
-                            }}
-                        }});
-                        if (credential) {{
-                            localStorage.setItem("nexa_bio_unlocked", "true");
-                            window.location.href = "/admin?pwd=" + encodeURIComponent("{ADMIN_PANEL_PASSWORD}");
-                        }}
-                    }} catch(e) {{
-                        alert("Biometric verification canceled or failed. Use password.");
-                    }}
-                }}
+                            }
+                        });
+                        statusEl.classList.add("hidden");
+                        if (credential) {
+                            window.location.href = "/admin?pwd=" + encodeURIComponent("adminnexa_dawitandargachew_0035484@##");
+                        }
+                    } catch (e) {
+                        statusEl.classList.add("hidden");
+                        alert("Biometric verification failed or canceled. Use Option 1 (Password).");
+                    }
+                }
             </script>
         </body>
         </html>
