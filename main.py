@@ -411,14 +411,15 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_store_leads_and_analytics(message_target, bot_token: str, store_name: str):
     try:
-        vis_res = await asyncio.to_thread(
-            lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bot_token).execute()
+        vis_res, leads_res = await asyncio.gather(
+            asyncio.to_thread(
+                lambda: supabase.table("tenant_visitors").select("chat_id", count="exact").eq("bot_token", bot_token).execute()
+            ),
+            asyncio.to_thread(
+                lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute()
+            )
         )
         total_bot_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
-
-        leads_res = await asyncio.to_thread(
-            lambda: supabase.table("leads").select("*").eq("bot_token", bot_token).order("updated_at", desc=True).limit(35).execute()
-        )
         leads_data = leads_res.data or []
 
         high_intent_count = 0
@@ -445,7 +446,8 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
 
         lines = [analytics_header]
         for idx, lead in enumerate(leads_data[:25], start=1):
-            name = lead.get("visitor_name") or "ስም ያልታወቀ"
+            raw_name = str(lead.get("visitor_name") or "").strip()
+            name = raw_name if raw_name and raw_name.lower() not in ["anonymous", "none", "null", "unknown"] else f"ደንበኛ #{lead.get('visitor_telegram_id', idx)}"
             phone = lead.get("phone_number") or "አልሰጠም ❌"
             chat_id_val = lead.get("visitor_telegram_id") or "N/A"
             summary = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
@@ -1292,10 +1294,22 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     data = await request.json()
     
     message = data.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
+    chat_obj = message.get("chat", {})
+    chat_id = chat_obj.get("id")
     user_text = message.get("text", "")
     user_obj = message.get("from", {})
-    visitor_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip() or "Anonymous"
+    full_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip()
+    if not full_name:
+        full_name = f"{chat_obj.get('first_name', '')} {chat_obj.get('last_name', '')}".strip()
+    username = user_obj.get("username") or chat_obj.get("username")
+    if full_name and username:
+        visitor_name = f"{full_name} (@{username})"
+    elif full_name:
+        visitor_name = full_name
+    elif username:
+        visitor_name = f"@{username}"
+    else:
+        visitor_name = f"User {chat_id}"
     
     if not chat_id or not user_text:
         return {"ok": True}
@@ -1330,21 +1344,28 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             logger.error(f"Tenant trial check error: {sub_check_err}")
 
     if supabase:
-        try:
-            await asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
-                "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
-            }, on_conflict="bot_token,chat_id").execute())
-        except Exception as e:
-            logger.error(f"Visitor record error: {e}")
+        async def _record_visitor_and_lead():
+            try:
+                await asyncio.gather(
+                    asyncio.to_thread(lambda: supabase.table("tenant_visitors").upsert({
+                        "bot_token": bot_token, "chat_id": str(chat_id), "created_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="bot_token,chat_id").execute()),
+                    asyncio.to_thread(lambda: supabase.table("leads").upsert({
+                        "bot_token": bot_token,
+                        "visitor_telegram_id": str(chat_id),
+                        "visitor_name": visitor_name,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="bot_token,visitor_telegram_id").execute())
+                )
+            except Exception as e:
+                logger.error(f"Visitor/Lead record error: {e}")
+        asyncio.create_task(_record_visitor_and_lead())
 
     if user_text == "/start":
         if supabase:
-            try:
-                await asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
-                    "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
-                }, on_conflict="chat_id,bot_token").execute())
-            except Exception:
-                pass
+            asyncio.create_task(asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
+                "chat_id": str(chat_id), "bot_token": bot_token, "language": "amharic"
+            }, on_conflict="chat_id,bot_token").execute()))
 
         ui_theme = store.get("ui_theme", "executive")
         theme_intros = {
@@ -1366,27 +1387,19 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         return {"ok": True}
 
     customer_lang = "amharic"
-    if supabase:
-        try:
-            lang_res = await asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute())
-            if lang_res.data:
-                customer_lang = lang_res.data[0]["language"]
-        except Exception:
-            pass
-
     history_messages = []
-    if supabase:
-        try:
-            hist_res = await asyncio.to_thread(lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).order("created_at", desc=True).limit(6).execute())
-            if hist_res.data:
-                history_messages = list(reversed(hist_res.data))
-        except Exception:
-            pass
-
     available_tags = []
     if supabase:
         try:
-            media_res = await asyncio.to_thread(lambda: supabase.table("property_media").select("item_tag, caption").eq("bot_token", bot_token).execute())
+            lang_res, hist_res, media_res = await asyncio.gather(
+                asyncio.to_thread(lambda: supabase.table("customer_languages").select("language").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).execute()),
+                asyncio.to_thread(lambda: supabase.table("chat_history").select("role, content").eq("chat_id", str(chat_id)).eq("bot_token", bot_token).order("created_at", desc=True).limit(6).execute()),
+                asyncio.to_thread(lambda: supabase.table("property_media").select("item_tag, caption").eq("bot_token", bot_token).execute())
+            )
+            if lang_res.data:
+                customer_lang = lang_res.data[0]["language"]
+            if hist_res.data:
+                history_messages = list(reversed(hist_res.data))
             if media_res.data:
                 available_tags = list({f"{m['item_tag']} ({m.get('caption', '')})" for m in media_res.data})
         except Exception:
@@ -1459,10 +1472,16 @@ async def analyze_and_upsert_lead(
         is_vip = bool(structured_data.get("is_high_payer", False))
         vip_prefix = "💎 VIP | " if is_vip else ""
 
+        extracted_name = str(structured_data.get("customer_name") or "").strip()
+        if not extracted_name or extracted_name.lower() in ["anonymous", "unknown", "none", "null", "user"]:
+            final_visitor_name = visitor_name
+        else:
+            final_visitor_name = extracted_name
+
         lead_payload = {
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
-            "visitor_name": structured_data.get("customer_name") or visitor_name,
+            "visitor_name": final_visitor_name,
             "interest_summary": f"[{intent_lvl.upper()}] {vip_prefix}{action_summary}",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
@@ -1496,26 +1515,20 @@ async def store_chat_webhook(payload: dict):
     if owner_telegram_id:
         try:
             owner_id_int = int(owner_telegram_id)
-            await get_or_create_user_subscription(owner_id_int)
             if not await verify_active_access(owner_id_int):
                 await http_client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
                     json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"}
                 )
                 return {"ok": True}
-            await deduct_credit(owner_id_int)
+            asyncio.create_task(deduct_credit(owner_id_int))
         except Exception as e:
             logger.error(f"Subscription enforcement error: {e}")
 
-    await http_client.post(
+    asyncio.create_task(http_client.post(
         f"https://api.telegram.org/bot{bot_token}/sendChatAction",
         json={"chat_id": chat_id, "action": "typing"}
-    )
-
-    lang_instructions = {
-        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል (Ge'ez) ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም። የቃላት አገባብህና ሰዋሰውህ እንደ ኢትዮጵያዊ የቋንቋ ባለሙያ እጅግ የጠራ ይሁን።",
-        "english": "Respond in English.",
-        "oromo": "Afaan Oromootiin deebisi."
+    ))
     }
 
     theme_prompts = {
@@ -1571,19 +1584,17 @@ async def store_chat_webhook(payload: dict):
     clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
 
     if supabase:
-        try:
-            now_user = datetime.now(timezone.utc)
-            now_assistant = now_user + timedelta(milliseconds=500)
-            
-            await asyncio.to_thread(lambda: supabase.table("chat_history").insert({
-                "chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()
-            }).execute())
-            
-            await asyncio.to_thread(lambda: supabase.table("chat_history").insert({
-                "chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()
-            }).execute())
-        except Exception as e:
-            logger.error(f"Chat history insert error: {e}")
+        async def _save_chat_history():
+            try:
+                now_user = datetime.now(timezone.utc)
+                now_assistant = now_user + timedelta(milliseconds=500)
+                await asyncio.to_thread(lambda: supabase.table("chat_history").insert([
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()},
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()}
+                ]).execute())
+            except Exception as e:
+                logger.error(f"Chat history insert error: {e}")
+        asyncio.create_task(_save_chat_history())
 
     asyncio.create_task(
         analyze_and_upsert_lead(
