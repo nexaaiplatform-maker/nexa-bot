@@ -32,6 +32,15 @@ logger = logging.getLogger("NexaAI")
 # Initialize FastAPI app first so all route decorators can use it
 app = FastAPI(title="Nexa AI Elite Commerce Backend")
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # -------------------------------------------------------------------
 # Configuration & Environment Variables
 # -------------------------------------------------------------------
@@ -448,58 +457,58 @@ async def admin_dashboard(pwd: str = ""):
             </section>
         </main>
         <script>
-            async function sendBroadcast() {{
+            async function sendBroadcast() {
                 const msg = document.getElementById("broadcast-msg").value;
-                if (!msg) {{
+                if (!msg) {
                     alert("Please write a message first.");
                     return;
-                }}
-                try {{
-                    const resp = await fetch("/admin/broadcast", {{
+                }
+                try {
+                    const resp = await fetch("/admin/broadcast", {
                         method: "POST",
-                        headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ message: msg, pwd: "{pwd}" }})
-                    }});
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: msg, pwd: "{pwd}" })
+                    });
                     const data = await resp.json();
-                    if (data.status === "success") {{
+                    if (data.status === "success") {
                         alert("Broadcast successfully sent to " + data.sent + " store owners!");
                         document.getElementById("broadcast-msg").value = "";
-                    }} else {{
+                    } else {
                         alert("Error: " + (data.message || "Failed to broadcast"));
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Network error sending broadcast: " + e);
-                }}
-            }}
+                }
+            }
 
-            async function registerBiometrics() {{
-                try {{
-                    if (!window.PublicKeyCredential) {{
+            async function registerBiometrics() {
+                try {
+                    if (!window.PublicKeyCredential) {
                         alert("Biometrics not supported on this device.");
                         return;
-                    }}
-                    const newCredential = await navigator.credentials.create({{
-                        publicKey: {{
+                    }
+                    const newCredential = await navigator.credentials.create({
+                        publicKey: {
                             challenge: new Uint8Array([8,22,50,90,12,33,44,11]),
-                            rp: {{ name: "Nexa AI Elite Admin" }},
-                            user: {{
+                            rp: { name: "Nexa AI Elite Admin" },
+                            user: {
                                 id: new Uint8Array([1, 2, 3, 4]),
                                 name: "admin@nexa.ai",
                                 displayName: "Elite Admin"
-                            }},
-                            pubKeyCredParams: [ {{ alg: -7, type: "public-key" }} ],
+                            },
+                            pubKeyCredParams: [ { alg: -7, type: "public-key" } ],
                             timeout: 60000,
                             attestation: "direct"
-                        }}
-                    }});
-                    if (newCredential) {{
+                        }
+                    });
+                    if (newCredential) {
                         localStorage.setItem("nexa_bio_unlocked", "true");
                         alert("Biometric passkey registered successfully on this browser!");
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Biometric registration failed or canceled.");
-                }}
-            }}
+                }
+            }
         </script>
     </body>
     </html>
@@ -559,9 +568,16 @@ async def admin_broadcast_message(request: Request):
     try:
         data = await request.json()
         message_text = data.get("message") or data.get("message_text", "")
+        target = data.get("target", "all")
+        pwd = data.get("pwd", "")
     except Exception:
         form = await request.form()
         message_text = form.get("message_text", "") or form.get("message", "")
+        target = form.get("target", "all")
+        pwd = form.get("pwd", "")
+
+    if pwd != ADMIN_PANEL_PASSWORD:
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
     if not message_text:
         return {"status": "error", "message": "Message is required"}
@@ -569,8 +585,20 @@ async def admin_broadcast_message(request: Request):
     sent_count = 0
     if supabase:
         try:
-            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id").execute())
-            owner_ids = list({s["owner_telegram_id"] for s in (stores_res.data or []) if s.get("owner_telegram_id")})
+            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
+            stores_list = stores_res.data or []
+
+            owner_ids = set()
+            for s in stores_list:
+                owner_id = s.get("owner_telegram_id")
+                if not owner_id:
+                    continue
+                tier = int(s.get("plan_tier", 1))
+                if target == "paid" and tier < 2:
+                    continue
+                elif target == "free" and tier >= 2:
+                    continue
+                owner_ids.add(owner_id)
 
             for owner_id in owner_ids:
                 try:
