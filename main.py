@@ -1,7 +1,7 @@
 from fastapi.responses import HTMLResponse
 from fastapi import Form, Response, Cookie
 
-ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "NexaAdmin2026#")
+ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##")
 
 
 # -------------------------------------------------------------------
@@ -1929,6 +1929,11 @@ async def store_chat_webhook(payload: dict):
         f"https://api.telegram.org/bot{bot_token}/sendChatAction",
         json={"chat_id": chat_id, "action": "typing"}
     ))
+
+    lang_instructions = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
+        "english": "Respond in English.",
+        "oromo": "Afaan Oromootiin deebisi."
     }
 
     theme_prompts = {
