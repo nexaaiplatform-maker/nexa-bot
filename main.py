@@ -25,6 +25,74 @@ from telegram.ext import (
 
 ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##")
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NexaAI")
+
+# Initialize FastAPI app first so all route decorators can use it
+app = FastAPI(title="Nexa AI Elite Commerce Backend")
+
+# -------------------------------------------------------------------
+# Configuration & Environment Variables
+# -------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
+
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
+
+TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
+AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
+
+# 3-Tier Feature & Pricing Matrix (Elite Upgrade Descriptions)
+TIER_CONFIG = {
+    1: {
+        "name": "Tier 1 (Starter)",
+        "price": 1000,
+        "features": "Core AI Sales, Text Catalog, Photo Support, Basic Leads",
+        "allows_photos": True,
+        "allows_videos": False,
+        "credits": 500
+    },
+    2: {
+        "name": "Tier 2 (Business Pro)",
+        "price": 2500,
+        "features": "Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes",
+        "allows_photos": True,
+        "allows_videos": False,
+        "credits": 2500
+    },
+    3: {
+        "name": "Tier 3 (Enterprise VIP)",
+        "price": 5000,
+        "features": "Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics",
+        "allows_photos": True,
+        "allows_videos": True,
+        "credits": 999999
+    },
+}
+
+# Initialize Clients with Fail-Safe Checks & Logging
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+if not supabase:
+    logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
+
+async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+if not async_groq_client:
+    logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
+
+# Master Telegram Bot Application
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
+
+# Global HTTP Client Pool for High Throughput
+http_client: httpx.AsyncClient = None
+
+# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
+STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
+
 
 # -------------------------------------------------------------------
 # Elite Nexa Web Admin Panel Routes
@@ -485,75 +553,6 @@ async def admin_broadcast_message(
 
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/admin?pwd={pwd}&broadcast=success", status_code=303)
-
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("NexaAI")
-
-# Initialize FastAPI
-app = FastAPI(title="Nexa AI Elite Commerce Backend")
-
-# -------------------------------------------------------------------
-# Configuration & Environment Variables
-# -------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
-
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
-
-TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
-AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
-
-# 3-Tier Feature & Pricing Matrix (Elite Upgrade Descriptions)
-TIER_CONFIG = {
-    1: {
-        "name": "Tier 1 (Starter)",
-        "price": 1000,
-        "features": "Core AI Sales, Text Catalog, Photo Support, Basic Leads",
-        "allows_photos": True,
-        "allows_videos": False,
-        "credits": 500
-    },
-    2: {
-        "name": "Tier 2 (Business Pro)",
-        "price": 2500,
-        "features": "Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes",
-        "allows_photos": True,
-        "allows_videos": False,
-        "credits": 2500
-    },
-    3: {
-        "name": "Tier 3 (Enterprise VIP)",
-        "price": 5000,
-        "features": "Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics",
-        "allows_photos": True,
-        "allows_videos": True,
-        "credits": 999999
-    },
-}
-
-# Initialize Clients with Fail-Safe Checks & Logging
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
-if not supabase:
-    logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
-
-async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-if not async_groq_client:
-    logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
-
-# Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
-
-# Global HTTP Client Pool for High Throughput
-http_client: httpx.AsyncClient = None
-
-# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
-STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 
 
 # -------------------------------------------------------------------
@@ -1128,7 +1127,6 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                             await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
                     elif t_info.status_code == 401:
-                        # Silently pass expired/revoked bot tokens without cluttering warning logs
                         pass
                 except Exception:
                     pass
@@ -1251,7 +1249,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        "እርምጃ 4 ከ 5: የሚፈልጉትን የአግልጋይ ደረጃ (Tier) ይምረጡ:\n"
+        "እርምጃ 4 ከ 5: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
         "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
         "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
         "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ",
@@ -1627,7 +1625,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
-    # Check if user is in payment upgrade flow (collecting name and phone for OCR)
     payment_step = context.user_data.get("payment_step")
     if payment_step == "awaiting_payer_name":
         context.user_data["payer_name"] = user_text.strip()
@@ -1813,7 +1810,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         })
         return {"ok": True}
 
-    # Verify if store owner's 3-day trial has expired and payment not made -> Stop AI response
     owner_id = store.get("owner_telegram_id")
     if owner_id:
         try:
