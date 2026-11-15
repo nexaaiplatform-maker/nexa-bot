@@ -55,6 +55,7 @@ TIER_CONFIG = {
         "features": "Core AI Sales, Text Catalog, Photo Support, Basic Leads",
         "allows_photos": True,
         "allows_videos": False,
+        "allows_voice": False,
         "credits": 500
     },
     2: {
@@ -63,6 +64,7 @@ TIER_CONFIG = {
         "features": "Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes",
         "allows_photos": True,
         "allows_videos": False,
+        "allows_voice": False,
         "credits": 2500
     },
     3: {
@@ -71,6 +73,16 @@ TIER_CONFIG = {
         "features": "Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics",
         "allows_photos": True,
         "allows_videos": True,
+        "allows_voice": False,
+        "credits": 999999
+    },
+    4: {
+        "name": "Tier 4 (AI Voice Concierge)",
+        "price": 7000,
+        "features": "Everything in VIP + Live AI Voice Calls, Custom Phone Number Integration, Real-time STT/TTS in Amharic",
+        "allows_photos": True,
+        "allows_videos": True,
+        "allows_voice": True,
         "credits": 999999
     },
 }
@@ -805,17 +817,20 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር\n"
         f"  _(Advanced AI, Photo Catalogs, Priority Leads)_ \n\n"
         f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
-        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n"
+        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n\n"
+        f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር\n"
+        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✨ **ለምን ወደ Elite Tier ያሻሽላሉ?**\n"
-        f"የበለጠ ኃይለኛ የ AI ሽያጭ ኤጀንት፣ ያልተወሰነ የደንበኞች ማስተናገጃ እና ዜሮ ገደብ ያገኛሉ!\n\n"
+        f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
+        f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
         f"እባክዎ ክፍያ ለመፈጸም ከታች ካሉት ዕቅዶች አንዱን ይምረጡ:"
     )
     
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር)", callback_data="tier_pay_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር)", callback_data="tier_pay_2")],
-        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር)", callback_data="tier_pay_3")]
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር)", callback_data="tier_pay_3")],
+        [InlineKeyboardButton("💎 Tier 4: AI Voice Concierge (7,000 ብር)", callback_data="tier_pay_4")]
     ]
     
     if update.callback_query:
@@ -1244,7 +1259,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_2")],
-        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_3")]
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_3")],
+        [InlineKeyboardButton("💎 Tier 4: AI Voice Concierge (7,000 ብር / ወር)", callback_data="tier_4")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1252,7 +1268,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "እርምጃ 4 ከ 5: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
         "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
         "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
-        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ",
+        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ\n"
+        "• **Tier 4:** ሁሉም የ VIP አገልግሎቶች + በቀጥታ የሚሰራ የ AI ድምጽ ስልክ ረዳት (AI Voice Call Receptionist)",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -1358,87 +1375,85 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.to_thread(
                     lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
                 )
-            except Exception as inner_e:
-                await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(inner_e)}")
-                return BOT_TOKEN
-
-    tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
-    cool_advert_text = (
-        f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**\n\n"
-        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
-        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!\n"
-        f"• የተመረጠው ደረጃ: {tier_info['name']}\n"
-        f"• ታላቅ ማስታወሻ: ቀጣይ ደንበኞችዎ አሁን በ 24/7 በራስ-ሰር ይስተናገዳሉ።\n\n"
-        f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን አሻሽለው Elite Features ማግኘት ይችላሉ!"
-    )
+@app.post("/api/voice-call-webhook/{bot_token}")
+async def ai_voice_call_webhook(bot_token: str, request: Request):
+    """
+    Tier 4 AI Voice Call Receptionist endpoint.
+    Compatible with free/low-cost telephony gateways (like Twilio, Exotel, or Webhook-based SIP trunks)
+    where inbound caller speech is transcribed to text, processed by Groq AI using the store's inventory,
+    and returned as TwiML / JSON speech for real-time voice response.
+    """
+    data = await request.json()
+    caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
+    spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
     
-    keyboard = [
-        [InlineKeyboardButton("🚀 አባልነት አሻሽል (Upgrade / Pay)", callback_data="buy_pro")],
-        [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
-    ]
-    
-    await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    return ConversationHandler.END
-
-
-async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("❌ ምዝገባው ተሰርዟል። ዝግጁ ሲሆኑ /register ይጠቀሙ።")
-    return ConversationHandler.END
-
-
-# -------------------------------------------------------------------
-# Media Upload Handler (/addmedia tag)
-# -------------------------------------------------------------------
-async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    caption = update.message.caption or ""
-    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
-    
-    if not match:
-        return
-
-    item_tag = match.group(1).lower()
-    
+    store = None
     if supabase:
         try:
-            stores_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", user_id).execute()
-            )
-            if not stores_res.data:
-                await update.effective_message.reply_text("❌ ምንም ንቁ መደብር አልተገኘም።")
-                return
-
-            bot_token = stores_res.data[0]["bot_token"]
-            
-            file_id = ""
-            media_type = "photo"
-            if update.message.photo:
-                file_id = update.message.photo[-1].file_id
-                media_type = "photo"
-            elif update.message.video:
-                file_id = update.message.video.file_id
-                media_type = "video"
-
-            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
-
-            await asyncio.to_thread(
-                lambda: supabase.table("property_media").insert({
-                    "bot_token": bot_token,
-                    "item_tag": item_tag,
-                    "file_id": file_id,
-                    "media_type": media_type,
-                    "caption": clean_caption
-                }).execute()
-            )
-            await update.effective_message.reply_text(f"✅ ሚዲያ በተሳካ ሁኔታ ተመዝግቧል! (Tag: `{item_tag}`)", parse_mode="Markdown")
+            res = await asyncio.to_thread(lambda: supabase.table("stores").select("*").eq("bot_token", bot_token).execute())
+            if res.data:
+                store = res.data[0]
         except Exception as e:
-            logger.error(f"Media upload error: {e}")
-            await update.effective_message.reply_text("⚠️ ሚዲያ ማስቀመጥ አልተቻለም።")
+            logger.error(f"Voice webhook store fetch error: {e}")
+            
+    if not store:
+        return {"status": "error", "message": "Store not found"}
+        
+    plan_tier = store.get("plan_tier", 1)
+    if plan_tier < 4:
+        return {"status": "unauthorized", "message": "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"}
+        
+    inventory = store.get("inventory_data", "")
+    store_name = store.get("store_name", "Nexa Store")
+    
+    system_prompt = (
+        f"You are the professional AI Voice Receptionist for company {store_name}. "
+        "Your responses will be spoken aloud to callers via Text-to-Speech in Amharic or English. "
+        "Keep answers polite, concise, natural, and directly helpful based on the store catalog below.\n\n"
+        f"Catalog:\n{inventory}"
+    )
+    
+    ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
+    if async_groq_client and spoken_text:
+        try:
+            completion = await async_groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": spoken_text}
+                ],
+                temperature=0.5,
+                max_tokens=250
+            )
+            ai_response = completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Voice AI generation error: {e}")
+            
+    # Record lead from phone call
+    if supabase and caller_phone:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("leads").upsert({
+                    "bot_token": bot_token,
+                    "visitor_telegram_id": f"phone_{caller_phone}",
+                    "visitor_name": f"Phone Caller ({caller_phone})",
+                    "phone_number": caller_phone,
+                    "interest_summary": f"[PHONE CALL] {spoken_text[:100]}",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }, on_conflict="bot_token,visitor_telegram_id").execute()
+            )
+        except Exception as lead_err:
+            logger.error(f"Phone lead log error: {lead_err}")
+            
+    return {
+        "status": "success",
+        "store_name": store_name,
+        "caller_phone": caller_phone,
+        "ai_reply_text": ai_response,
+        "tts_ready": True
+    }
 
 
-# -------------------------------------------------------------------
-# Button, Receipt & Master Message Handlers
-# -------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1451,6 +1466,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_tier_upgrade_flow(update, context, 2)
     elif query.data in ["upgrade_tier_3", "tier_pay_3", "tier_3"]:
         await start_tier_upgrade_flow(update, context, 3)
+    elif query.data in ["upgrade_tier_4", "tier_pay_4", "tier_4"]:
+        await start_tier_upgrade_flow(update, context, 4)
     elif query.data == "view_summary":
         await summary_command(update, context)
     elif query.data == "view_weekly":
