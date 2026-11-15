@@ -405,11 +405,10 @@ async def admin_dashboard(pwd: str = ""):
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-2 flex items-center gap-2"><span>📢</span> Broadcast Feature Update / Notice to All Nexa Bot Owners</h3>
                 <p class="text-slate-400 text-sm mb-4">Send instant direct telegram notifications to all active store owners on your platform.</p>
-                <form method="post" action="/admin/broadcast" class="space-y-4">
-                    <input type="hidden" name="pwd" value="{pwd}">
-                    <textarea name="message_text" placeholder="Write your platform announcement or new feature update here..." rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 text-sm" required></textarea>
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition shadow-lg shadow-blue-600/30">Broadcast Message Now</button>
-                </form>
+                <div class="space-y-4">
+                    <textarea id="broadcast-msg" placeholder="Write your platform announcement or new feature update here..." rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 text-sm" required></textarea>
+                    <button type="button" onclick="sendBroadcast()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition shadow-lg shadow-blue-600/30">Broadcast Message Now</button>
+                </div>
             </section>
 
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
@@ -449,6 +448,30 @@ async def admin_dashboard(pwd: str = ""):
             </section>
         </main>
         <script>
+            async function sendBroadcast() {{
+                const msg = document.getElementById("broadcast-msg").value;
+                if (!msg) {{
+                    alert("Please write a message first.");
+                    return;
+                }}
+                try {{
+                    const resp = await fetch("/admin/broadcast", {{
+                        method: "POST",
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ message: msg, pwd: "{pwd}" }})
+                    }});
+                    const data = await resp.json();
+                    if (data.status === "success") {{
+                        alert("Broadcast successfully sent to " + data.sent + " store owners!");
+                        document.getElementById("broadcast-msg").value = "";
+                    }} else {{
+                        alert("Error: " + (data.message || "Failed to broadcast"));
+                    }}
+                }} catch (e) {{
+                    alert("Network error sending broadcast: " + e);
+                }}
+            }}
+
             async function registerBiometrics() {{
                 try {{
                     if (!window.PublicKeyCredential) {{
