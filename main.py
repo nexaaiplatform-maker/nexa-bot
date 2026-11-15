@@ -532,33 +532,41 @@ async def admin_payment_action(
 
 
 @app.post("/admin/broadcast")
-async def admin_broadcast_message(
-    pwd: str = Form(...),
-    message_text: str = Form(...)
-):
-    if pwd != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=403, detail="Unauthorized")
+async def admin_broadcast_message(request: Request):
+    try:
+        data = await request.json()
+        message_text = data.get("message") or data.get("message_text", "")
+    except Exception:
+        form = await request.form()
+        message_text = form.get("message_text", "") or form.get("message", "")
 
+    if not message_text:
+        return {"status": "error", "message": "Message is required"}
+
+    sent_count = 0
     if supabase:
-        stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id").execute())
-        owner_ids = list({s["owner_telegram_id"] for s in (stores_res.data or []) if s.get("owner_telegram_id")})
+        try:
+            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id").execute())
+            owner_ids = list({s["owner_telegram_id"] for s in (stores_res.data or []) if s.get("owner_telegram_id")})
 
-        for owner_id in owner_ids:
-            try:
-                await http_client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": int(owner_id),
-                        "text": f"📢 **NEXA PLATFORM UPDATE / NOTICE**\n\n{message_text}",
-                        "parse_mode": "Markdown"
-                    }
-                )
-                await asyncio.sleep(0.05)
-            except Exception as e:
-                logger.error(f"Broadcast error for {owner_id}: {e}")
+            for owner_id in owner_ids:
+                try:
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": int(owner_id),
+                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n\n{message_text}",
+                            "parse_mode": "Markdown"
+                        }
+                    )
+                    sent_count += 1
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    logger.error(f"Broadcast error for {owner_id}: {e}")
+        except Exception as err:
+            logger.error(f"Broadcast fetch error: {err}")
 
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=f"/admin?pwd={pwd}&broadcast=success", status_code=303)
+    return {"status": "success", "sent": sent_count}
 
 
 # -------------------------------------------------------------------
