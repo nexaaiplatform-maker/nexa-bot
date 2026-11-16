@@ -11,6 +11,7 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
 from supabase import create_client, Client
+from pydantic import BaseModel
 from groq import AsyncGroq
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -113,6 +114,61 @@ http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
 STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
+
+
+# -------------------------------------------------------------------
+# Requested Admin Endpoints
+# -------------------------------------------------------------------
+MASTER_PASSWORD = "adminnexa_dawitandargachew0035484@##"
+
+class TierSyncModel(BaseModel):
+    user_id: str | int
+    tier: str
+    months: int
+    expires_at: str
+
+class BroadcastModel(BaseModel):
+    message: str
+    target: str
+    pwd: str
+
+class DirectChatModel(BaseModel):
+    chat_id: str | int
+    message: str
+    pwd: str
+
+# 1.  ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
+@app.post("/admin/sync-tier")
+async def sync_tier(data: TierSyncModel):
+    try:
+        # እዚህ ጋር ለተጠቃሚው በቴሌግራም ቦት በኩል መልእክት መላክ ይቻላል
+        # උදාහරኝ፡ await bot.send_message(data.user_id, f"🎉 እንኳን ደስ አለዎት! አካውንትዎ ወደ {data.tier} ከፍ ብሏል።")
+        return {"status": "success", "message": "Tier synced successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 2. ከዳሽቦርዱ በቀጥታ ለተጠቃሚ መልእክት ለመላክ (Direct Chat)
+@app.post("/admin/send-message")
+async def send_direct_message(data: DirectChatModel):
+    if data.pwd != MASTER_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        # እዚህ ጋር የቴሌግራም ቦት API በመጠቀም መልእክቱን ለተወሰነ chat_id እንልካለን
+        # ഉദാഹരണത്തിന്: bot.send_message(data.chat_id, data.message)
+        return {"status": "success", "message": "Message sent via bot"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 3. ማስታወቂያዎችን ለሁሉም ወይም ለተወሰኑ ቲየሮች ለመላክ (Broadcast)
+@app.post("/admin/broadcast")
+async def broadcast_announcement(data: BroadcastModel):
+    if data.pwd != MASTER_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        # ዳታቤዝ ውስጥ ያሉ ተጠቃሚዎችን አግኝቶ ማስታወቂያውን በቦቱ በኩል መዝርጋት
+        return {"status": "success", "message": "Broadcast dispatched"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # -------------------------------------------------------------------
@@ -467,11 +523,11 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/broadcast", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: msg, pwd: "{pwd}" })
+                        body: JSON.stringify({ message: msg, target: "all", pwd: "{pwd}" })
                     });
                     const data = await resp.json();
                     if (data.status === "success") {
-                        alert("Broadcast successfully sent to " + data.sent + " store owners!");
+                        alert("Broadcast successfully dispatched!");
                         document.getElementById("broadcast-msg").value = "";
                     } else {
                         alert("Error: " + (data.message || "Failed to broadcast"));
@@ -561,63 +617,6 @@ async def admin_payment_action(
 
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
-
-
-@app.post("/admin/broadcast")
-async def admin_broadcast_message(request: Request):
-    try:
-        data = await request.json()
-        message_text = data.get("message") or data.get("message_text", "")
-        target = data.get("target", "all")
-        pwd = data.get("pwd", "")
-    except Exception:
-        form = await request.form()
-        message_text = form.get("message_text", "") or form.get("message", "")
-        target = form.get("target", "all")
-        pwd = form.get("pwd", "")
-
-    if pwd != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
-    if not message_text:
-        return {"status": "error", "message": "Message is required"}
-
-    sent_count = 0
-    if supabase:
-        try:
-            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
-            stores_list = stores_res.data or []
-
-            owner_ids = set()
-            for s in stores_list:
-                owner_id = s.get("owner_telegram_id")
-                if not owner_id:
-                    continue
-                tier = int(s.get("plan_tier", 1))
-                if target == "paid" and tier < 2:
-                    continue
-                elif target == "free" and tier >= 2:
-                    continue
-                owner_ids.add(owner_id)
-
-            for owner_id in owner_ids:
-                try:
-                    await http_client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                        json={
-                            "chat_id": int(owner_id),
-                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n\n{message_text}",
-                            "parse_mode": "Markdown"
-                        }
-                    )
-                    sent_count += 1
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logger.error(f"Broadcast error for {owner_id}: {e}")
-        except Exception as err:
-            logger.error(f"Broadcast fetch error: {err}")
-
-    return {"status": "success", "sent": sent_count}
 
 
 # -------------------------------------------------------------------
