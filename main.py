@@ -107,7 +107,7 @@ if not async_groq_client:
     logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
 
 # Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build() if TELEGRAM_BOT_TOKEN else None
 
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
@@ -598,16 +598,18 @@ async def admin_payment_action(
                 asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
             )
-            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
-                "chat_id": int(user_id),
-                "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
-            })
+            if telegram_app and telegram_app.bot:
+                await telegram_app.bot.send_message(
+                    chat_id=int(user_id),
+                    text=f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
+                )
         else:
             await asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "rejected"}).eq("id", review_id).execute())
-            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
-                "chat_id": int(user_id),
-                "text": "⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
-            })
+            if telegram_app and telegram_app.bot:
+                await telegram_app.bot.send_message(
+                    chat_id=int(user_id),
+                    text="⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
+                )
 
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
 
@@ -1747,9 +1749,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as q_err:
                 logger.error(f"Manual queue insert error: {q_err}")
 
-        if ADMIN_TELEGRAM_ID:
+        if ADMIN_TELEGRAM_ID and telegram_app and telegram_app.bot:
             try:
-                await context.bot.forward_message(chat_id=ADMIN_TELEGRAM_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
+                await telegram_app.bot.forward_message(chat_id=ADMIN_TELEGRAM_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
             except Exception:
                 pass
         frustration_fix_text = (
@@ -1888,22 +1890,33 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 async def startup_event():
     global http_client
     http_client = httpx.AsyncClient(timeout=10.0)
-    await telegram_app.initialize()
-    await telegram_app.start() 
-    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
+    if telegram_app:
+        try:
+            await telegram_app.initialize()
+            await telegram_app.start() 
+            if TELEGRAM_BOT_TOKEN:
+                await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
+        except Exception as e:
+            logger.error(f"Telegram startup error: {e}")
 
     asyncio.create_task(run_ai_system_audit_and_heal())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await telegram_app.stop()
+    if telegram_app:
+        try:
+            await telegram_app.stop()
+        except Exception:
+            pass
     if http_client:
         await http_client.aclose()
 
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
+    if not telegram_app:
+        return {"status": "no telegram app"}
     update = Update.de_json(await request.json(), telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
@@ -1944,9 +1957,10 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             logger.error(f"Tenant store fetch error: {e}")
 
     if not store:
-        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-            "chat_id": chat_id, "text": "⚠️ Store configuration not found or inactive."
-        })
+        if http_client:
+            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id, "text": "⚠️ Store configuration not found or inactive."
+            })
         return {"ok": True}
 
     owner_id = store.get("owner_telegram_id")
@@ -1954,10 +1968,11 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         try:
             is_active = await verify_active_access(int(owner_id))
             if not is_active:
-                await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                    "chat_id": chat_id,
-                    "text": "⚠️ **የዚህ መደብር የነጻ ሙከራ ጊዜ (3 Days Trial) አልቋል እንዲሁም ክፍያ አልተፈጸመም።** ባለቤቱ አባልነቱን እስከሚያሻሽል ድረስ የ AI አገልግሎቱ ጊዜያዊ ቆሟል።"
-                })
+                if http_client:
+                    await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                        "chat_id": chat_id,
+                        "text": "⚠️ **የዚህ መደብር የነጻ ሙከራ ጊዜ (3 Days Trial) አልቋል እንዲሁም ክፍያ አልተፈጸመም።** ባለቤቱ አባልነቱን እስከሚያሻሽል ድረስ የ AI አገልግሎቱ ጊዜያዊ ቆሟል።"
+                    })
                 return {"ok": True}
         except Exception as sub_check_err:
             logger.error(f"Tenant trial check error: {sub_check_err}")
@@ -1999,10 +2014,11 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
-        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": direct_welcome
-        })
+        if http_client:
+            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": direct_welcome
+            })
         return {"ok": True}
 
     customer_lang = "amharic"
@@ -2135,19 +2151,21 @@ async def store_chat_webhook(payload: dict):
         try:
             owner_id_int = int(owner_telegram_id)
             if not await verify_active_access(owner_id_int):
-                await http_client.post(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"}
-                )
+                if http_client:
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"}
+                    )
                 return {"ok": True}
             asyncio.create_task(deduct_credit(owner_id_int))
         except Exception as e:
             logger.error(f"Subscription enforcement error: {e}")
 
-    asyncio.create_task(http_client.post(
-        f"https://api.telegram.org/bot{bot_token}/sendChatAction",
-        json={"chat_id": chat_id, "action": "typing"}
-    ))
+    if http_client:
+        asyncio.create_task(http_client.post(
+            f"https://api.telegram.org/bot{bot_token}/sendChatAction",
+            json={"chat_id": chat_id, "action": "typing"}
+        ))
 
     lang_instructions = {
         "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
@@ -2231,12 +2249,13 @@ async def store_chat_webhook(payload: dict):
         )
     )
 
-    await http_client.post(
-        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-        json={"chat_id": chat_id, "text": clean_ai_reply}
-    )
+    if http_client:
+        await http_client.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": clean_ai_reply}
+        )
 
-    if tag_match and supabase:
+    if tag_match and supabase and http_client:
         requested_tag = tag_match.group(1).lower()
         try:
             media_rows = await asyncio.to_thread(
@@ -2269,42 +2288,43 @@ async def store_chat_webhook(payload: dict):
     return {"ok": True}
 
 
-conv_handler = ConversationHandler(
-    entry_points=[
-        CommandHandler("register", register_start),
-        CallbackQueryHandler(register_start, pattern="^start_register$")
-    ],
-    states={
-        STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
-        INDUSTRY: [
-            CallbackQueryHandler(receive_industry, pattern="^ind_"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
+if telegram_app:
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("register", register_start),
+            CallbackQueryHandler(register_start, pattern="^start_register$")
         ],
-        UI_THEME: [
-            CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
-        ],
-        PLAN_TIER: [
-            CallbackQueryHandler(receive_plan_tier, pattern="^tier_"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_tier)
-        ],
-        INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
-        BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel_registration)],
-)
+        states={
+            STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
+            INDUSTRY: [
+                CallbackQueryHandler(receive_industry, pattern="^ind_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
+            ],
+            UI_THEME: [
+                CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
+            ],
+            PLAN_TIER: [
+                CallbackQueryHandler(receive_plan_tier, pattern="^tier_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_tier)
+            ],
+            INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
+            BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_registration)],
+    )
 
-telegram_app.add_handler(CommandHandler("start", start_command))
-telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
-telegram_app.add_handler(CommandHandler("pay", upgrade_command))
-telegram_app.add_handler(CommandHandler("leads", leads_command))
-telegram_app.add_handler(CommandHandler("update", update_command))
-telegram_app.add_handler(CommandHandler("audit", audit_command))
-telegram_app.add_handler(CommandHandler("summary", summary_command))
-telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
-telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
-telegram_app.add_handler(conv_handler)
-telegram_app.add_handler(CallbackQueryHandler(button_handler))
-telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
-telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+    telegram_app.add_handler(CommandHandler("pay", upgrade_command))
+    telegram_app.add_handler(CommandHandler("leads", leads_command))
+    telegram_app.add_handler(CommandHandler("update", update_command))
+    telegram_app.add_handler(CommandHandler("audit", audit_command))
+    telegram_app.add_handler(CommandHandler("summary", summary_command))
+    telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
+    telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
+    telegram_app.add_handler(conv_handler)
+    telegram_app.add_handler(CallbackQueryHandler(button_handler))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
