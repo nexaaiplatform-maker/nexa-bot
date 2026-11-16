@@ -115,6 +115,8 @@ http_client: httpx.AsyncClient = None
 # Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
 STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 PARTNER_TELEBIRR = 100  # Conversation state for setting partner telebirr account
+STORE_PHONE = 101       # Conversation state for capturing store business / owner phone
+CHANGE_PHONE = 102      # Conversation state for updating existing store phone
 
 
 # -------------------------------------------------------------------
@@ -853,15 +855,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "2️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
-        "3️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "4️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
-        "5️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "6️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
+        "2️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ\n"
+        "3️⃣ /startvoice / /stopvoice - የ AI ድምጽ ስልክ ረዳት አገልግሎትን ያስጀምሩ ወይም ያቁሙ\n"
+        "4️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
+        "5️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "6️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
+        "7️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "8️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
     )
     
     keyboard = [
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
+        [InlineKeyboardButton("📞 የንግድ ስልክ ቁጥር ማስተካከያ (/setphone)", callback_data="change_partner_phone")],
         [InlineKeyboardButton("🤝 Nexa Partnership (1/4 ኮሚሽን አግኝ)", callback_data="partner_menu")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
@@ -934,7 +939,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("store_name, bot_token, ui_theme, plan_tier").eq("owner_telegram_id", owner_id).execute()
+            lambda: supabase.table("stores").select("store_name, bot_token, ui_theme, plan_tier, business_phone, voice_ai_active").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
@@ -946,12 +951,15 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             tier_num = store.get("plan_tier", 1)
             tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
+            bus_phone = store.get("business_phone") or "አልተመዘገበም ❌"
+            voice_status = "🟢 በሥራ ላይ (Active)" if store.get("voice_ai_active", True) else "🛑 ቆሟል (Paused)"
             bots_list_text += (
                 f"🤖 **{store['store_name']}**\n"
                 f"• ዕቅድ / ፕላን: {tier_name}\n"
+                f"• የንግድ ስልክ ቁጥር: `{bus_phone}`\n"
+                f"• የድምጽ ስልክ ረዳት: {voice_status}\n"
                 f"• ቶከን ቁልፍ: `{masked_token}`\n"
-                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n"
-                f"• ሁኔታ: በሥራ ላይ እና የተገናኘ ✅\n\n"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n\n"
             )
         await update.effective_message.reply_text(bots_list_text, parse_mode="Markdown")
     except Exception as e:
@@ -1352,7 +1360,7 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
 
     await target_msg.reply_text(
-        "🤖 **አዲስ የ AI ቦት ምዝገባ (Step 1 from 5)**\n\n"
+        "🤖 **አዲስ የ AI ቦት ምዝገባ (Step 1 from 6)**\n\n"
         "እባክዎ ለንግድዎ ወይም ለመደብርዎ የሚሆን ስም (Store/Business Name) ይጻፉ:",
         parse_mode="Markdown"
     )
@@ -1372,7 +1380,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.effective_message.reply_text(
-        f"እርምጃ 2 ከ 5: የንግድ ዘርፍዎን (Industry) ይምረጡ:",
+        f"እርምጃ 2 ከ 6: የንግድ ዘርፍዎን (Industry) ይምረጡ:",
         reply_markup=reply_markup
     )
     return INDUSTRY
@@ -1401,7 +1409,7 @@ async def receive_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        "እርምጃ 3 ከ 5: የቦትዎን የውይይት ዘይቤ (UI/UX Theme) ይምረጡ:",
+        "እርምጃ 3 ከ 6: የቦትዎን የውይይት ዘይቤ (UI/UX Theme) ይምረጡ:",
         reply_markup=reply_markup
     )
     return UI_THEME
@@ -1429,7 +1437,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        "እርምጃ 4 ከ 5: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
+        "እርምጃ 4 ከ 6: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
         "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
         "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
         "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ\n"
@@ -1456,7 +1464,7 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await target_message(
         f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር)\n\n"
-        "እርምጃ 5 ከ 5: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
+        "እርምጃ 5 ከ 6: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
     )
     return INVENTORY
 
@@ -1485,18 +1493,43 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["inventory_data"] = structured_inventory
     await update.effective_message.reply_text(
         "✅ Catalog successfully sorted and structured by AI!\n\n"
-        "ወደ ኦፊሴላዊው የቴሌግራም @BotFather ይሂዱ፣ ቦት ይፍጠሩ (/newbot)፣ ልዩ የቦት ቶከን ይውሰዱ እና እዚህ ይለጥፉ:"
+        "እርምጃ 6 ከ 6: እባክዎ ከ @BotFather የወሰዱትን ልዩ የቦት ቶከን (Bot Token) እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
 
 
 async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_token = update.effective_message.text.strip()
+    
+    # Validate and clean bot token format
+    if not re.match(r"^\d+:[A-Za-z0-9_-]{35}$", bot_token):
+        await update.effective_message.reply_text("⚠️ ያስገቡት የቦት ቶከን ቅርጸት ልክ አይደለም። እባክዎ ከ @BotFather ትክክለኛውን ቶከን ኮፒ አድርገው ይላኩ:")
+        return BOT_TOKEN
+
+    context.user_data["bot_token"] = bot_token
+
+    await update.effective_message.reply_text(
+        "📱 **የስልክ ቁጥር ምዝገባ (Ethiopian Phone Number)**\n\n"
+        "እባክዎ የንግድዎን ወይም የባለቤቱን ስልክ ቁጥር ያስገቡ (`09...` ወይም `07...`):",
+        parse_mode="Markdown"
+    )
+    return STORE_PHONE
+
+
+async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone_input = update.effective_message.text.strip()
+    
+    # Validate Ethiopian phone format (09 or 07 followed by 8 digits)
+    if not re.match(r"^0[79]\d{8}$", phone_input.replace(" ", "")):
+        await update.effective_message.reply_text("⚠️ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር አይደለም። እባክዎ በ 09 ወይም በ 07 የሚጀምር 10 አሃዝ ቁጥር ይጻፉ (ለምሳሌ: 0911223344):")
+        return STORE_PHONE
+
     owner_telegram_id = str(update.effective_user.id)
     store_name = context.user_data.get("store_name", "My Store")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
     ui_theme = context.user_data.get("ui_theme", "executive")
     plan_tier = context.user_data.get("plan_tier", 1)
+    bot_token = context.user_data.get("bot_token")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
     
@@ -1506,12 +1539,12 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             json={"url": tenant_webhook_url}
         )
         if not resp.json().get("ok"):
-            await update.effective_message.reply_text("⚠️ ያስገቡት የቦት ቶከን ልክ አይደለም። እባክዎ ትክክለኛ ቶከን እንደገና ይላኩ:")
-            return BOT_TOKEN
+            await update.effective_message.reply_text("⚠️ የቦቱ ዌብሁክ ሊመዘገብ አልቻለም። እባክዎ /register በመጠቀም እንደገና ይሞክሩ።")
+            return ConversationHandler.END
     except Exception as e:
         logger.error(f"SetWebhook error: {e}")
-        await update.effective_message.reply_text("⚠️ ቶከኑን ማረጋገጥ አልተቻለም። እባክዎ ትክክለኛ ቶከን ያስገቡ:")
-        return BOT_TOKEN
+        await update.effective_message.reply_text("⚠️ ቶከኑን ማረጋገጥ አልተቻለም።")
+        return ConversationHandler.END
 
     if supabase:
         try:
@@ -1521,35 +1554,39 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "store_name": store_name,
                 "inventory_data": inventory_data,
                 "ui_theme": ui_theme,
-                "plan_tier": plan_tier
+                "plan_tier": plan_tier,
+                "owner_phone": phone_input,
+                "business_phone": phone_input,
+                "voice_ai_active": True
             }
             await asyncio.to_thread(
                 lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
             )
         except Exception as e:
-            logger.error(f"Supabase strict upsert error, attempting graceful fallback: {e}")
+            logger.error(f"Supabase upsert error with phone: {e}")
             try:
                 fallback_payload = {
                     "bot_token": bot_token,
                     "owner_telegram_id": owner_telegram_id,
                     "store_name": store_name,
                     "inventory_data": inventory_data,
-                    "ui_theme": ui_theme
+                    "ui_theme": ui_theme,
+                    "plan_tier": plan_tier
                 }
                 await asyncio.to_thread(
                     lambda: supabase.table("stores").upsert(fallback_payload, on_conflict="bot_token").execute()
                 )
             except Exception as inner_e:
                 await update.effective_message.reply_text(f"⚠️ ዳታቤዝ ላይ ማስቀመጥ አልተቻለም: {str(inner_e)}")
-                return BOT_TOKEN
+                return ConversationHandler.END
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     cool_advert_text = (
         f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**\n\n"
-        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
+        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
         f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!\n"
         f"• የተመረጠው ደረጃ: {tier_info['name']}\n"
-        f"• ታላቅ ማስታወሻ: ቀጣይ ደንበኞችዎ አሁን በ 24/7 በራስ-ሰር ይስተናገዳሉ።\n\n"
+        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ Groq AI እና Cloud Webhook ጋር ተገናኝቷል!\n\n"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን አሻሽለው Elite Features ማግኘት ይችላሉ!"
     )
     
@@ -1560,6 +1597,121 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ConversationHandler.END
+
+
+# -------------------------------------------------------------------
+# Phone Number & AI Voice Control Commands (/setphone, /stopvoice, /startvoice)
+# -------------------------------------------------------------------
+async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("bot_token, store_name, business_phone").eq("owner_telegram_id", owner_id).execute()
+        )
+        if not res.data:
+            await update.effective_message.reply_text("❌ እስካሁን የተመዘገበ ቦት የለዎትም። ለመፍጠር /register ይጠቀሙ።")
+            return
+
+        if len(res.data) == 1:
+            context.user_data["target_bot_token_for_phone"] = res.data[0]["bot_token"]
+            await update.effective_message.reply_text(
+                f"📞 ለ **{res.data[0]['store_name']}** አዲስ የንግድ ስልክ ቁጥር (Business Phone) ያስገቡ (`09...` ወይም `07...`):",
+                parse_mode="Markdown"
+            )
+            return CHANGE_PHONE
+        else:
+            keyboard = []
+            for store in res.data:
+                keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']} ({store.get('business_phone', 'No Phone')})", callback_data=f"change_phone_bot_{store['bot_token']}")])
+            
+            await update.effective_message.reply_text(
+                "📱 **ስልክ ቁጥር መቀየሪያ (Change Phone)**\n\nእባክዎ ስልክ ቁጥሩን ማሻሻል የሚፈልጉትን መደብር/ቦት ይምረጡ:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await update.effective_message.reply_text(f"ስልክ ቁጥር ማምጣት አልተቻለም: {str(e)}")
+
+
+async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone_input = update.effective_message.text.strip()
+    
+    if not re.match(r"^0[79]\d{8}$", phone_input.replace(" ", "")):
+        await update.effective_message.reply_text("⚠️ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር አይደለም። እባክዎ በ 09 ወይም በ 07 የሚጀምር 10 አሃዝ ቁጥር ይጻፉ:")
+        return CHANGE_PHONE
+
+    bot_token = context.user_data.get("target_bot_token_for_phone")
+    if not bot_token and supabase:
+        owner_id = str(update.effective_user.id)
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
+        )
+        if res.data:
+            bot_token = res.data[0]["bot_token"]
+
+    if not bot_token:
+        await update.effective_message.reply_text("❌ የተሳሳተ ሂደት። እባክዎ /setphone በመጠቀም እንደገና ይሞክሩ።")
+        return ConversationHandler.END
+
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("stores").update({
+                    "business_phone": phone_input,
+                    "owner_phone": phone_input
+                }).eq("bot_token", bot_token).execute()
+            )
+            await update.effective_message.reply_text(
+                f"✅ የስልክ ቁጥርዎ በተሳካ ሁኔታ ወደ **`{phone_input}`** ተቀይሯል!",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await update.effective_message.reply_text(f"⚠️ ስልክ ቁጥሩን ማሻሻል አልተቻለም: {str(e)}")
+
+    context.user_data.pop("target_bot_token_for_phone", None)
+    return ConversationHandler.END
+
+
+async def stop_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"voice_ai_active": False}).eq("owner_telegram_id", owner_id).execute()
+        )
+        await update.effective_message.reply_text(
+            "🛑 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በጊዜያዊነት ቆሟል።**\n\n"
+            "ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ አያነጋግራቸውም። እንደገና ለማስጀመር `/startvoice` የሚለውን ይጠቀሙ።",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"ስራውን ማቆም አልተቻለም: {str(e)}")
+
+
+async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"voice_ai_active": True}).eq("owner_telegram_id", owner_id).execute()
+        )
+        await update.effective_message.reply_text(
+            "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
+            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"አገልግሎቱን ማስጀመር አልተቻለም: {str(e)}")
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1638,6 +1790,9 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     if not store:
         return {"status": "error", "message": "Store not found"}
         
+    if store.get("voice_ai_active") is False:
+        return {"status": "paused", "message": "AI Voice concierge is currently stopped by store owner"}
+
     plan_tier = store.get("plan_tier", 1)
     if plan_tier < 4:
         return {"status": "unauthorized", "message": "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"}
@@ -1759,6 +1914,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "change_partner_phone":
         context.user_data["partner_setup_step"] = "awaiting_telebirr"
         await query.message.reply_text("📞 አዲስ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number) ይጻፉ:")
+    elif query.data.startswith("change_phone_bot_"):
+        bot_token = query.data.replace("change_phone_bot_", "")
+        context.user_data["target_bot_token_for_phone"] = bot_token
+        await query.message.reply_text("📞 እባክዎ ለአዲሱ መደብር አዲስ የንግድ ስልክ ቁጥር (`09...` ወይም `07...`) ያስገቡ:", parse_mode="Markdown")
     elif query.data == "start_menu":
         await start_command(update, context)
     elif query.data == "view_summary":
@@ -2093,12 +2252,12 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
-        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade, /partner). "
+        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade, /partner, /setphone, /startvoice, /stopvoice). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
-        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'partner', 'general'. "
+        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'partner', 'setphone', 'voice', 'general'. "
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
-    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞችን ስልክ ቁጥር ለማየት /leads፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
+    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ ስልክ ቁጥር ለመቀየር /setphone፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
@@ -2126,6 +2285,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         await upgrade_command(update, context)
     elif intent == "partner":
         await partner_command(update, context)
+    elif intent == "setphone":
+        await setphone_command(update, context)
     else:
         await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
 
@@ -2518,7 +2679,8 @@ async def store_chat_webhook(payload: dict):
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("register", register_start),
-        CallbackQueryHandler(register_start, pattern="^start_register$")
+        CallbackQueryHandler(register_start, pattern="^start_register$"),
+        CommandHandler("setphone", setphone_command)
     ],
     states={
         STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
@@ -2536,6 +2698,8 @@ conv_handler = ConversationHandler(
         ],
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
+        STORE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_phone)],
+        CHANGE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_updated_phone)],
     },
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
@@ -2550,6 +2714,8 @@ telegram_app.add_handler(CommandHandler("audit", audit_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
 telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
 telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
+telegram_app.add_handler(CommandHandler("stopvoice", stop_voice_command))
+telegram_app.add_handler(CommandHandler("startvoice", start_voice_command))
 telegram_app.add_handler(conv_handler)
 telegram_app.add_handler(CallbackQueryHandler(button_handler))
 telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
