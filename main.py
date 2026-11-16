@@ -117,7 +117,7 @@ STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 
 
 # -------------------------------------------------------------------
-# Requested Admin Endpoints
+# Requested Admin Endpoints & Pydantic Models
 # -------------------------------------------------------------------
 MASTER_PASSWORD = "adminnexa_dawitandargachew0035484@##"
 
@@ -137,12 +137,10 @@ class DirectChatModel(BaseModel):
     message: str
     pwd: str
 
-# 1.  ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
+# 1. ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
 @app.post("/admin/sync-tier")
 async def sync_tier(data: TierSyncModel):
     try:
-        # እዚህ ጋር ለተጠቃሚው በቴሌግራም ቦት በኩል መልእክት መላክ ይቻላል
-        # උදාහරኝ፡ await bot.send_message(data.user_id, f"🎉 እንኳን ደስ አለዎት! አካውንትዎ ወደ {data.tier} ከፍ ብሏል።")
         return {"status": "success", "message": "Tier synced successfully"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -153,8 +151,6 @@ async def send_direct_message(data: DirectChatModel):
     if data.pwd != MASTER_PASSWORD:
         return {"status": "error", "message": "Unauthorized password"}
     try:
-        # እዚህ ጋር የቴሌግራም ቦት API በመጠቀም መልእክቱን ለተወሰነ chat_id እንልካለን
-        # ഉദാഹരണത്തിന്: bot.send_message(data.chat_id, data.message)
         return {"status": "success", "message": "Message sent via bot"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -165,7 +161,6 @@ async def broadcast_announcement(data: BroadcastModel):
     if data.pwd != MASTER_PASSWORD:
         return {"status": "error", "message": "Unauthorized password"}
     try:
-        # ዳታቤዝ ውስጥ ያሉ ተጠቃሚዎችን አግኝቶ ማስታወቂያውን በቦቱ በኩል መዝርጋት
         return {"status": "success", "message": "Broadcast dispatched"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -579,7 +574,6 @@ async def view_telegram_receipt(file_id: str, pwd: str = ""):
     file_path = file_resp.json().get("result", {}).get("file_path")
     if not file_path:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}")
 
 
@@ -615,7 +609,6 @@ async def admin_payment_action(
                 "text": "⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
             })
 
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
 
 
@@ -637,7 +630,7 @@ def parse_dt(dt_val) -> datetime:
 
 
 # -------------------------------------------------------------------
-# Root Health Check (Supports GET and HEAD for UptimeRobot)
+# Root Health Check
 # -------------------------------------------------------------------
 @app.get("/")
 @app.head("/")
@@ -646,7 +639,7 @@ async def root_health_check():
 
 
 # -------------------------------------------------------------------
-# Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
+# Core Logic: Persistent Trial, Credit & Visitor Engine
 # -------------------------------------------------------------------
 async def get_or_create_user_subscription(user_id: int) -> dict:
     now = datetime.now(timezone.utc)
@@ -729,7 +722,7 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Dynamic Payout Load Balancer (Unified with Selected Tier Price)
+# Dynamic Payout Load Balancer
 # -------------------------------------------------------------------
 async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, int, str]:
     now = datetime.now(timezone.utc)
@@ -759,7 +752,7 @@ async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, 
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands (Clean Enterprise UI)
+# Telegram Master Bot Handlers & Commands
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1151,7 +1144,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------------------------
-# AI Self-Healing & Auto-Correction Auditor (Nexa & Connected Bots)
+# AI Self-Healing & Auto-Correction Auditor
 # -------------------------------------------------------------------
 async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
     if not supabase:
@@ -1461,7 +1454,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     caption = update.message.caption or ""
-    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
+    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\-]+)", caption)
     
     if not match:
         return
@@ -1488,7 +1481,7 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 file_id = update.message.video.file_id
                 media_type = "video"
 
-            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
+            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\-]+", "", caption).strip()
 
             await asyncio.to_thread(
                 lambda: supabase.table("property_media").insert({
@@ -2074,7 +2067,7 @@ async def analyze_and_upsert_lead(
         "requested_items": "concise summary of specific products/services they want",
         "estimated_budget": 0,
         "intent_level": "high" or "medium" or "low",
-        "is_high_payer": true or false (true if asking about bulk orders, high-ticket/premium items, or showing readiness to pay substantial amounts),
+        "is_high_payer": true or false,
         "action_summary": "1-sentence Amharic summary of the customer's exact need and next step"
     }}
     """
@@ -2211,8 +2204,8 @@ async def store_chat_webhook(payload: dict):
             logger.error(f"Groq Chat Error: {e}")
             ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
-    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\\-]+)\\\]", ai_reply)
-    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
+    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\\\]", ai_reply)
+    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\-]+\\\]", "", ai_reply).strip()
 
     if supabase:
         async def _save_chat_history():
