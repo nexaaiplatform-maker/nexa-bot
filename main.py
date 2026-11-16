@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 from supabase import create_client, Client
 from groq import AsyncGroq
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -760,7 +761,6 @@ async def log_visitor(user_id: int):
 # Dynamic Payout Load Balancer (Unified with Selected Tier Price)
 # -------------------------------------------------------------------
 async def select_optimal_payout_destination(amount_etb: int, partner_id: str = None) -> tuple[str, str, int, str]:
-    # If a partner referred this user, direct 1/4 (25%) of the payment directly to the partner's registered Telebirr account!
     if partner_id and supabase:
         try:
             p_res = await asyncio.to_thread(
@@ -809,7 +809,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     await log_visitor(user_id)
     
-    # Check if user joined via partner referral link (e.g. /start ref_12345)
     args = context.args
     if args and args[0].startswith("ref_"):
         partner_id = args[0].replace("ref_", "")
@@ -1886,7 +1885,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 }).execute())
                 await asyncio.to_thread(lambda: supabase.table("pending_orders").delete().eq("user_id", str(user_id)).execute())
 
-                # If this user was referred by a partner, credit the partner's earnings & referral count!
                 ref_res = await asyncio.to_thread(
                     lambda: supabase.table("referrals").select("partner_id").eq("referred_user_id", str(user_id)).execute()
                 )
@@ -1905,7 +1903,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                                 "total_referrals": current_refs + 1
                             }).eq("partner_id", partner_id).execute()
                         )
-                    # Notify partner about commission earned
                     try:
                         await context.bot.send_message(
                             chat_id=int(partner_id),
@@ -1965,7 +1962,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
-    # Handle Partner Telebirr setup step
     partner_setup_step = context.user_data.get("partner_setup_step")
     if partner_setup_step == "awaiting_telebirr":
         telebirr_phone = user_text.strip()
@@ -2034,7 +2030,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         
         exact_amount_etb = random.randint(base_price, base_price + 100)
 
-        # Check if this user was referred by a partner
         partner_id = None
         if supabase:
             try:
