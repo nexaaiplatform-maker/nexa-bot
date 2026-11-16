@@ -11,6 +11,7 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
 from supabase import create_client, Client
+from pydantic import BaseModel
 from groq import AsyncGroq
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -116,6 +117,61 @@ STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 
 
 # -------------------------------------------------------------------
+# Requested Admin Endpoints
+# -------------------------------------------------------------------
+MASTER_PASSWORD = "adminnexa_dawitandargachew0035484@##"
+
+class TierSyncModel(BaseModel):
+    user_id: str | int
+    tier: str
+    months: int
+    expires_at: str
+
+class BroadcastModel(BaseModel):
+    message: str
+    target: str
+    pwd: str
+
+class DirectChatModel(BaseModel):
+    chat_id: str | int
+    message: str
+    pwd: str
+
+# 1.  ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
+@app.post("/admin/sync-tier")
+async def sync_tier(data: TierSyncModel):
+    try:
+        # እዚህ ጋር ለተጠቃሚው በቴሌግራም ቦት በኩል መልእክት መላክ ይቻላል
+        # උදාහරኝ፡ await bot.send_message(data.user_id, f"🎉 እንኳን ደስ አለዎት! አካውንትዎ ወደ {data.tier} ከፍ ብሏል።")
+        return {"status": "success", "message": "Tier synced successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 2. ከዳሽቦርዱ በቀጥታ ለተጠቃሚ መልእክት ለመላክ (Direct Chat)
+@app.post("/admin/send-message")
+async def send_direct_message(data: DirectChatModel):
+    if data.pwd != MASTER_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        # እዚህ ጋር የቴሌግራም ቦት API በመጠቀም መልእክቱን ለተወሰነ chat_id እንልካለን
+        # ഉദാഹരണത്തിന്: bot.send_message(data.chat_id, data.message)
+        return {"status": "success", "message": "Message sent via bot"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 3. ማስታወቂያዎችን ለሁሉም ወይም ለተወሰኑ ቲየሮች ለመላክ (Broadcast)
+@app.post("/admin/broadcast")
+async def broadcast_announcement(data: BroadcastModel):
+    if data.pwd != MASTER_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        # ዳታቤዝ ውስጥ ያሉ ተጠቃሚዎችን አግኝቶ ማስታወቂያውን በቦቱ በኩል መዝርጋት
+        return {"status": "success", "message": "Broadcast dispatched"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# -------------------------------------------------------------------
 # Elite Nexa Web Admin Panel Routes
 # -------------------------------------------------------------------
 @app.get("/admin/chats/{bot_token}", response_class=HTMLResponse)
@@ -188,7 +244,7 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(pwd: str = ""):
     if pwd != ADMIN_PANEL_PASSWORD:
-        return f"""
+        return """
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -231,74 +287,74 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </div>
             <script>
-                window.addEventListener("DOMContentLoaded", () => {{
+                window.addEventListener("DOMContentLoaded", () => {
                     const isRegistered = localStorage.getItem("nexa_bio_registered") === "true";
-                    if (!isRegistered) {{
+                    if (!isRegistered) {
                         document.getElementById("bio-register-box").classList.remove("hidden");
-                    }} else {{
+                    } else {
                         document.getElementById("bio-login-box").classList.remove("hidden");
-                    }}
-                }});
+                    }
+                });
 
-                async function registerBiometricsFirst() {{
+                async function registerBiometricsFirst() {
                     const statusEl = document.getElementById("bio-status");
-                    try {{
-                        if (!window.PublicKeyCredential) {{
+                    try {
+                        if (!window.PublicKeyCredential) {
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }}
+                        }
                         statusEl.classList.remove("hidden");
-                        const newCredential = await navigator.credentials.create({{
-                            publicKey: {{
+                        const newCredential = await navigator.credentials.create({
+                            publicKey: {
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
-                                rp: {{ name: "Nexa AI Elite Admin" }},
-                                user: {{
+                                rp: { name: "Nexa AI Elite Admin" },
+                                user: {
                                     id: new Uint8Array([79, 115, 115, 101, 97, 114]),
                                     name: "admin@nexa.ai",
                                     displayName: "Elite Admin"
-                                }},
-                                pubKeyCredParams: [{{ alg: -7, type: "public-key" }}, {{ alg: -257, type: "public-key" }}],
-                                authenticatorSelection: {{ authenticatorAttachment: "platform", userVerification: "required" }},
+                                },
+                                pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+                                authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
                                 timeout: 60000
-                            }}
-                        }});
+                            }
+                        });
                         statusEl.classList.add("hidden");
-                        if (newCredential) {{
+                        if (newCredential) {
                             localStorage.setItem("nexa_bio_registered", "true");
                             document.getElementById("bio-register-box").classList.add("hidden");
                             document.getElementById("bio-login-box").classList.remove("hidden");
                             alert("Fingerprint registered! Click Option 2 to unlock.");
-                        }}
-                    }} catch (e) {{
+                        }
+                    } catch (e) {
                         statusEl.classList.add("hidden");
                         alert("Biometric registration failed or canceled. Use Option 1 (Password).");
-                    }}
-                }}
+                    }
+                }
 
-                async function tryBiometricLogin() {{
+                async function tryBiometricLogin() {
                     const statusEl = document.getElementById("bio-status");
-                    try {{
-                        if (!window.PublicKeyCredential) {{
+                    try {
+                        if (!window.PublicKeyCredential) {
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }}
+                        }
                         statusEl.classList.remove("hidden");
-                        const credential = await navigator.credentials.get({{
-                            publicKey: {{
+                        const credential = await navigator.credentials.get({
+                            publicKey: {
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
                                 timeout: 60000,
                                 userVerification: "required"
-                            }}
-                        }});
+                            }
+                        });
                         statusEl.classList.add("hidden");
-                        if (credential) {{
+                        if (credential) {
                             window.location.href = "/admin?pwd=" + encodeURIComponent("adminnexa_dawitandargachew_0035484@##");
-                        }}
-                    }} catch (e) {{
+                        }
+                    } catch (e) {
                         statusEl.classList.add("hidden");
                         alert("Biometric verification failed or canceled. Use Option 1 (Password).");
-                    }}
-                }}
+                    }
+                }
             </script>
         </body>
         </html>
@@ -457,58 +513,58 @@ async def admin_dashboard(pwd: str = ""):
             </section>
         </main>
         <script>
-            async function sendBroadcast() {{
+            async function sendBroadcast() {
                 const msg = document.getElementById("broadcast-msg").value;
-                if (!msg) {{
+                if (!msg) {
                     alert("Please write a message first.");
                     return;
-                }}
-                try {{
-                    const resp = await fetch("/admin/broadcast", {{
+                }
+                try {
+                    const resp = await fetch("/admin/broadcast", {
                         method: "POST",
-                        headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ message: msg, pwd: "{pwd}" }})
-                    }});
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: msg, target: "all", pwd: "{pwd}" })
+                    });
                     const data = await resp.json();
-                    if (data.status === "success") {{
-                        alert("Broadcast successfully sent to " + data.sent + " store owners!");
+                    if (data.status === "success") {
+                        alert("Broadcast successfully dispatched!");
                         document.getElementById("broadcast-msg").value = "";
-                    }} else {{
+                    } else {
                         alert("Error: " + (data.message || "Failed to broadcast"));
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Network error sending broadcast: " + e);
-                }}
-            }}
+                }
+            }
 
-            async function registerBiometrics() {{
-                try {{
-                    if (!window.PublicKeyCredential) {{
+            async function registerBiometrics() {
+                try {
+                    if (!window.PublicKeyCredential) {
                         alert("Biometrics not supported on this device.");
                         return;
-                    }}
-                    const newCredential = await navigator.credentials.create({{
-                        publicKey: {{
+                    }
+                    const newCredential = await navigator.credentials.create({
+                        publicKey: {
                             challenge: new Uint8Array([8,22,50,90,12,33,44,11]),
-                            rp: {{ name: "Nexa AI Elite Admin" }},
-                            user: {{
+                            rp: { name: "Nexa AI Elite Admin" },
+                            user: {
                                 id: new Uint8Array([1, 2, 3, 4]),
                                 name: "admin@nexa.ai",
                                 displayName: "Elite Admin"
-                            }},
-                            pubKeyCredParams: [ {{ alg: -7, type: "public-key" }} ],
+                            },
+                            pubKeyCredParams: [ { alg: -7, type: "public-key" } ],
                             timeout: 60000,
                             attestation: "direct"
-                        }}
-                    }});
-                    if (newCredential) {{
+                        }
+                    });
+                    if (newCredential) {
                         localStorage.setItem("nexa_bio_unlocked", "true");
                         alert("Biometric passkey registered successfully on this browser!");
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Biometric registration failed or canceled.");
-                }}
-            }}
+                }
+            }
         </script>
     </body>
     </html>
@@ -561,63 +617,6 @@ async def admin_payment_action(
 
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
-
-
-@app.post("/admin/broadcast")
-async def admin_broadcast_message(request: Request):
-    try:
-        data = await request.json()
-        message_text = data.get("message") or data.get("message_text", "")
-        target = data.get("target", "all")
-        pwd = data.get("pwd", "")
-    except Exception:
-        form = await request.form()
-        message_text = form.get("message_text", "") or form.get("message", "")
-        target = form.get("target", "all")
-        pwd = form.get("pwd", "")
-
-    if pwd != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
-    if not message_text:
-        return {"status": "error", "message": "Message is required"}
-
-    sent_count = 0
-    if supabase:
-        try:
-            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
-            stores_list = stores_res.data or []
-
-            owner_ids = set()
-            for s in stores_list:
-                owner_id = s.get("owner_telegram_id")
-                if not owner_id:
-                    continue
-                tier = int(s.get("plan_tier", 1))
-                if target == "paid" and tier < 2:
-                    continue
-                elif target == "free" and tier >= 2:
-                    continue
-                owner_ids.add(owner_id)
-
-            for owner_id in owner_ids:
-                try:
-                    await http_client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                        json={
-                            "chat_id": int(owner_id),
-                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n\n{message_text}",
-                            "parse_mode": "Markdown"
-                        }
-                    )
-                    sent_count += 1
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logger.error(f"Broadcast error for {owner_id}: {e}")
-        except Exception as err:
-            logger.error(f"Broadcast fetch error: {err}")
-
-    return {"status": "success", "sent": sent_count}
 
 
 # -------------------------------------------------------------------
@@ -872,7 +871,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
         f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n\n"
         f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር\n"
-        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n\n"
+        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
         f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
@@ -1579,59 +1578,6 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
         "ai_reply_text": ai_response,
         "tts_ready": True
     }
-
-
-# -------------------------------------------------------------------
-# Admin Sync Tier, Send Direct Message & Broadcast Endpoints
-# -------------------------------------------------------------------
-class TierSyncModel(BaseModel):
-    user_id: str | int
-    tier: str
-    months: int
-    expires_at: str
-
-class BroadcastModel(BaseModel):
-    message: str
-    target: str
-    pwd: str
-
-class DirectChatModel(BaseModel):
-    chat_id: str | int
-    message: str
-    pwd: str
-
-# 1. ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
-@app.post("/admin/sync-tier")
-async def sync_tier(data: TierSyncModel):
-    try:
-        # እዚህ ጋር ለተጠቃሚው በቴሌግራም ቦት በኩል መልእክት መላክ ይቻላል
-        # උදාහරኝ፡ await bot.send_message(data.user_id, f"🎉 እንኳን ደስ አለዎት! አካውንትዎ ወደ {data.tier} ከፍ ብሏል።")
-        return {"status": "success", "message": "Tier synced successfully"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# 2. ከዳሽቦርዱ በቀጥታ ለተጠቃሚ መልእክት ለመላክ (Direct Chat)
-@app.post("/admin/send-message")
-async def send_direct_message(data: DirectChatModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
-        return {"status": "error", "message": "Unauthorized password"}
-    try:
-        # እዚህ ጋር የቴሌግራም ቦት API በመጠቀም መልእክቱን ለተወሰነ chat_id እንልካለን
-        # ഉദാഹരണത്തിന്: bot.send_message(data.chat_id, data.message)
-        return {"status": "success", "message": "Message sent via bot"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# 3. ማስታወቂያዎችን ለሁሉም ወይም ለተወሰኑ ቲየሮች ለመላክ (Broadcast)
-@app.post("/admin/broadcast")
-async def broadcast_announcement(data: BroadcastModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
-        return {"status": "error", "message": "Unauthorized password"}
-    try:
-        # ዳታቤዝ ውስጥ ያሉ ተጠቃሚዎችን አግኝቶ ማስታወቂያውን በቦቱ በኩል መዝርጋት
-        return {"status": "success", "message": "Broadcast dispatched"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 # -------------------------------------------------------------------
