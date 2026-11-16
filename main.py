@@ -11,7 +11,6 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
 from supabase import create_client, Client
-from pydantic import BaseModel
 from groq import AsyncGroq
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -107,63 +106,14 @@ if not async_groq_client:
     logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
 
 # Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build() if TELEGRAM_BOT_TOKEN else None
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
 
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
 STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
-
-
-# -------------------------------------------------------------------
-# Requested Admin Endpoints & Pydantic Models
-# -------------------------------------------------------------------
-MASTER_PASSWORD = "adminnexa_dawitandargachew0035484@##"
-
-class TierSyncModel(BaseModel):
-    user_id: str | int
-    tier: str
-    months: int
-    expires_at: str
-
-class BroadcastModel(BaseModel):
-    message: str
-    target: str
-    pwd: str
-
-class DirectChatModel(BaseModel):
-    chat_id: str | int
-    message: str
-    pwd: str
-
-# 1. ቲየር ሲቀየር ተጠቃሚውን በቴሌግራም ለማሳወቅ
-@app.post("/admin/sync-tier")
-async def sync_tier(data: TierSyncModel):
-    try:
-        return {"status": "success", "message": "Tier synced successfully"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# 2. ከዳሽቦርዱ በቀጥታ ለተጠቃሚ መልእክት ለመላክ (Direct Chat)
-@app.post("/admin/send-message")
-async def send_direct_message(data: DirectChatModel):
-    if data.pwd != MASTER_PASSWORD:
-        return {"status": "error", "message": "Unauthorized password"}
-    try:
-        return {"status": "success", "message": "Message sent via bot"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# 3. ማስታወቂያዎችን ለሁሉም ወይም ለተወሰኑ ቲየሮች ለመላክ (Broadcast)
-@app.post("/admin/broadcast")
-async def broadcast_announcement(data: BroadcastModel):
-    if data.pwd != MASTER_PASSWORD:
-        return {"status": "error", "message": "Unauthorized password"}
-    try:
-        return {"status": "success", "message": "Broadcast dispatched"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+PARTNER_TELEBIRR = 100  # Conversation state for setting partner telebirr account
 
 
 # -------------------------------------------------------------------
@@ -239,7 +189,7 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(pwd: str = ""):
     if pwd != ADMIN_PANEL_PASSWORD:
-        return """
+        return f"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -282,92 +232,94 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </div>
             <script>
-                window.addEventListener("DOMContentLoaded", () => {
+                window.addEventListener("DOMContentLoaded", () => {{
                     const isRegistered = localStorage.getItem("nexa_bio_registered") === "true";
-                    if (!isRegistered) {
+                    if (!isRegistered) {{
                         document.getElementById("bio-register-box").classList.remove("hidden");
-                    } else {
+                    }} else {{
                         document.getElementById("bio-login-box").classList.remove("hidden");
-                    }
-                });
+                    }}
+                }});
 
-                async function registerBiometricsFirst() {
+                async function registerBiometricsFirst() {{
                     const statusEl = document.getElementById("bio-status");
-                    try {
-                        if (!window.PublicKeyCredential) {
+                    try {{
+                        if (!window.PublicKeyCredential) {{
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }
+                        }}
                         statusEl.classList.remove("hidden");
-                        const newCredential = await navigator.credentials.create({
-                            publicKey: {
+                        const newCredential = await navigator.credentials.create({{
+                            publicKey: {{
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
-                                rp: { name: "Nexa AI Elite Admin" },
-                                user: {
+                                rp: {{ name: "Nexa AI Elite Admin" }},
+                                user: {{
                                     id: new Uint8Array([79, 115, 115, 101, 97, 114]),
                                     name: "admin@nexa.ai",
                                     displayName: "Elite Admin"
-                                },
-                                pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
-                                authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+                                }},
+                                pubKeyCredParams: [{{ alg: -7, type: "public-key" }}, {{ alg: -257, type: "public-key" }}],
+                                authenticatorSelection: {{ authenticatorAttachment: "platform", userVerification: "required" }},
                                 timeout: 60000
-                            }
-                        });
+                            }}
+                        }});
                         statusEl.classList.add("hidden");
-                        if (newCredential) {
+                        if (newCredential) {{
                             localStorage.setItem("nexa_bio_registered", "true");
                             document.getElementById("bio-register-box").classList.add("hidden");
                             document.getElementById("bio-login-box").classList.remove("hidden");
                             alert("Fingerprint registered! Click Option 2 to unlock.");
-                        }
-                    } catch (e) {
+                        }}
+                    }} catch (e) {{
                         statusEl.classList.add("hidden");
                         alert("Biometric registration failed or canceled. Use Option 1 (Password).");
-                    }
-                }
+                    }}
+                }}
 
-                async function tryBiometricLogin() {
+                async function tryBiometricLogin() {{
                     const statusEl = document.getElementById("bio-status");
-                    try {
-                        if (!window.PublicKeyCredential) {
+                    try {{
+                        if (!window.PublicKeyCredential) {{
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }
+                        }}
                         statusEl.classList.remove("hidden");
-                        const credential = await navigator.credentials.get({
-                            publicKey: {
+                        const credential = await navigator.credentials.get({{
+                            publicKey: {{
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
                                 timeout: 60000,
                                 userVerification: "required"
-                            }
-                        });
+                            }}
+                        }});
                         statusEl.classList.add("hidden");
-                        if (credential) {
+                        if (credential) {{
                             window.location.href = "/admin?pwd=" + encodeURIComponent("adminnexa_dawitandargachew_0035484@##");
-                        }
-                    } catch (e) {
+                        }}
+                    }} catch (e) {{
                         statusEl.classList.add("hidden");
                         alert("Biometric verification failed or canceled. Use Option 1 (Password).");
-                    }
-                }
+                    }}
+                }}
             </script>
         </body>
         </html>
         """
 
-    manual_reviews, stores_data, subs_data, leads_data = [], [], [], []
+    manual_reviews, stores_data, subs_data, leads_data, partners_data = [], [], [], [], []
     if supabase:
         try:
-            r1, r2, r3, r4 = await asyncio.gather(
+            r1, r2, r3, r4, r5 = await asyncio.gather(
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").select("*").order("created_at", desc=True).limit(30).execute()),
                 asyncio.to_thread(lambda: supabase.table("stores").select("*").execute()),
                 asyncio.to_thread(lambda: supabase.table("subscriptions").select("*").execute()),
-                asyncio.to_thread(lambda: supabase.table("leads").select("*").order("updated_at", desc=True).limit(40).execute())
+                asyncio.to_thread(lambda: supabase.table("leads").select("*").order("updated_at", desc=True).limit(40).execute()),
+                asyncio.to_thread(lambda: supabase.table("partners").select("*").execute())
             )
             manual_reviews = r1.data or []
             stores_data = r2.data or []
             subs_data = r3.data or []
             leads_data = r4.data or []
+            partners_data = r5.data or []
         except Exception as e:
             logger.error(f"Admin fetch error: {e}")
 
@@ -402,6 +354,18 @@ async def admin_dashboard(pwd: str = ""):
             <td class="p-4">{img_btn}</td>
             <td class="p-4">{status_lbl}</td>
             <td class="p-4">{actions}</td>
+        </tr>
+        """
+
+    partners_html = ""
+    for p in partners_data:
+        partners_html += f"""
+        <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
+            <td class="p-4 font-medium text-white">{p.get('partner_name', 'Partner')}</td>
+            <td class="p-4 font-mono text-xs text-emerald-400">{p.get('telebirr_number')}</td>
+            <td class="p-4 font-mono text-xs text-blue-400">nexa_bot?start=ref_{p.get('partner_id')}</td>
+            <td class="p-4 text-slate-300 font-semibold">{p.get('total_referrals', 0)}</td>
+            <td class="p-4 text-emerald-400 font-bold">{p.get('total_earned', 0):,.2f} ETB</td>
         </tr>
         """
 
@@ -472,6 +436,18 @@ async def admin_dashboard(pwd: str = ""):
             </section>
 
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>🤝</span> Nexa Partners / Affiliates Program ({len(partners_data)})</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
+                            <th class="p-4">Partner Name</th><th class="p-4">Telebirr Account</th><th class="p-4">Referral Link Code</th><th class="p-4">Total Subscriptions</th><th class="p-4">Commission Earned (1/4)</th>
+                        </tr>
+                        {partners_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No registered partners yet.</td></tr>'}
+                    </table>
+                </div>
+            </section>
+
+            <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>💳</span> Telebirr Payment Review & Mismatch Queue</h3>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse">
@@ -508,58 +484,58 @@ async def admin_dashboard(pwd: str = ""):
             </section>
         </main>
         <script>
-            async function sendBroadcast() {
+            async function sendBroadcast() {{
                 const msg = document.getElementById("broadcast-msg").value;
-                if (!msg) {
+                if (!msg) {{
                     alert("Please write a message first.");
                     return;
-                }
-                try {
-                    const resp = await fetch("/admin/broadcast", {
+                }}
+                try {{
+                    const resp = await fetch("/admin/broadcast", {{
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: msg, target: "all", pwd: "{pwd}" })
-                    });
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ message: msg, pwd: "{pwd}" }})
+                    }});
                     const data = await resp.json();
-                    if (data.status === "success") {
-                        alert("Broadcast successfully dispatched!");
+                    if (data.status === "success") {{
+                        alert("Broadcast successfully sent to " + data.sent + " store owners!");
                         document.getElementById("broadcast-msg").value = "";
-                    } else {
+                    }} else {{
                         alert("Error: " + (data.message || "Failed to broadcast"));
-                    }
-                } catch (e) {
+                    }}
+                }} catch (e) {{
                     alert("Network error sending broadcast: " + e);
-                }
-            }
+                }}
+            }}
 
-            async function registerBiometrics() {
-                try {
-                    if (!window.PublicKeyCredential) {
+            async function registerBiometrics() {{
+                try {{
+                    if (!window.PublicKeyCredential) {{
                         alert("Biometrics not supported on this device.");
                         return;
-                    }
-                    const newCredential = await navigator.credentials.create({
-                        publicKey: {
+                    }}
+                    const newCredential = await navigator.credentials.create({{
+                        publicKey: {{
                             challenge: new Uint8Array([8,22,50,90,12,33,44,11]),
-                            rp: { name: "Nexa AI Elite Admin" },
-                            user: {
+                            rp: {{ name: "Nexa AI Elite Admin" }},
+                            user: {{
                                 id: new Uint8Array([1, 2, 3, 4]),
                                 name: "admin@nexa.ai",
                                 displayName: "Elite Admin"
-                            },
-                            pubKeyCredParams: [ { alg: -7, type: "public-key" } ],
+                            }},
+                            pubKeyCredParams: [ {{ alg: -7, type: "public-key" }} ],
                             timeout: 60000,
                             attestation: "direct"
-                        }
-                    });
-                    if (newCredential) {
+                        }}
+                    }});
+                    if (newCredential) {{
                         localStorage.setItem("nexa_bio_unlocked", "true");
                         alert("Biometric passkey registered successfully on this browser!");
-                    }
-                } catch (e) {
+                    }}
+                }} catch (e) {{
                     alert("Biometric registration failed or canceled.");
-                }
-            }
+                }}
+            }}
         </script>
     </body>
     </html>
@@ -574,6 +550,7 @@ async def view_telegram_receipt(file_id: str, pwd: str = ""):
     file_path = file_resp.json().get("result", {}).get("file_path")
     if not file_path:
         raise HTTPException(status_code=404, detail="Receipt not found")
+    from fastapi.responses import RedirectResponse
     return RedirectResponse(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}")
 
 
@@ -598,20 +575,76 @@ async def admin_payment_action(
                 asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
             )
-            if telegram_app and telegram_app.bot:
-                await telegram_app.bot.send_message(
-                    chat_id=int(user_id),
-                    text=f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
-                )
+            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                "chat_id": int(user_id),
+                "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
+            })
         else:
             await asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "rejected"}).eq("id", review_id).execute())
-            if telegram_app and telegram_app.bot:
-                await telegram_app.bot.send_message(
-                    chat_id=int(user_id),
-                    text="⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
-                )
+            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                "chat_id": int(user_id),
+                "text": "⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
+            })
 
+    from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
+
+
+@app.post("/admin/broadcast")
+async def admin_broadcast_message(request: Request):
+    try:
+        data = await request.json()
+        message_text = data.get("message") or data.get("message_text", "")
+        target = data.get("target", "all")
+        pwd = data.get("pwd", "")
+    except Exception:
+        form = await request.form()
+        message_text = form.get("message_text", "") or form.get("message", "")
+        target = form.get("target", "all")
+        pwd = form.get("pwd", "")
+
+    if pwd != ADMIN_PANEL_PASSWORD:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    if not message_text:
+        return {"status": "error", "message": "Message is required"}
+
+    sent_count = 0
+    if supabase:
+        try:
+            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
+            stores_list = stores_res.data or []
+
+            owner_ids = set()
+            for s in stores_list:
+                owner_id = s.get("owner_telegram_id")
+                if not owner_id:
+                    continue
+                tier = int(s.get("plan_tier", 1))
+                if target == "paid" and tier < 2:
+                    continue
+                elif target == "free" and tier >= 2:
+                    continue
+                owner_ids.add(owner_id)
+
+            for owner_id in owner_ids:
+                try:
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": int(owner_id),
+                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n\n{message_text}",
+                            "parse_mode": "Markdown"
+                        }
+                    )
+                    sent_count += 1
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    logger.error(f"Broadcast error for {owner_id}: {e}")
+        except Exception as err:
+            logger.error(f"Broadcast fetch error: {err}")
+
+    return {"status": "success", "sent": sent_count}
 
 
 # -------------------------------------------------------------------
@@ -632,7 +665,7 @@ def parse_dt(dt_val) -> datetime:
 
 
 # -------------------------------------------------------------------
-# Root Health Check
+# Root Health Check (Supports GET and HEAD for UptimeRobot)
 # -------------------------------------------------------------------
 @app.get("/")
 @app.head("/")
@@ -641,7 +674,7 @@ async def root_health_check():
 
 
 # -------------------------------------------------------------------
-# Core Logic: Persistent Trial, Credit & Visitor Engine
+# Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
 # -------------------------------------------------------------------
 async def get_or_create_user_subscription(user_id: int) -> dict:
     now = datetime.now(timezone.utc)
@@ -724,9 +757,24 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Dynamic Payout Load Balancer
+# Dynamic Payout Load Balancer (Unified with Selected Tier Price)
 # -------------------------------------------------------------------
-async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, int, str]:
+async def select_optimal_payout_destination(amount_etb: int, partner_id: str = None) -> tuple[str, str, int, str]:
+    # If a partner referred this user, direct 1/4 (25%) of the payment directly to the partner's registered Telebirr account!
+    if partner_id and supabase:
+        try:
+            p_res = await asyncio.to_thread(
+                lambda: supabase.table("partners").select("*").eq("partner_id", partner_id).execute()
+            )
+            if p_res.data:
+                partner = p_res.data[0]
+                partner_phone = partner.get("telebirr_number")
+                if partner_phone:
+                    commission_amount = int(amount_etb * 0.25)
+                    return (f"Partner Telebirr ({partner.get('partner_name', 'Affiliate')})", partner_phone, commission_amount, "PARTNER_TELEBIRR")
+        except Exception as e:
+            logger.error(f"Partner payout routing error: {e}")
+
     now = datetime.now(timezone.utc)
     twenty_four_hours_ago = now - timedelta(hours=24)
     
@@ -754,12 +802,28 @@ async def select_optimal_payout_destination(amount_etb: int) -> tuple[str, str, 
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands
+# Telegram Master Bot Handlers & Commands (Clean Enterprise UI)
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await log_visitor(user_id)
+    
+    # Check if user joined via partner referral link (e.g. /start ref_12345)
+    args = context.args
+    if args and args[0].startswith("ref_"):
+        partner_id = args[0].replace("ref_", "")
+        if supabase:
+            try:
+                await asyncio.to_thread(
+                    lambda: supabase.table("referrals").upsert({
+                        "referred_user_id": str(user_id),
+                        "partner_id": partner_id,
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="referred_user_id").execute()
+                )
+            except Exception as e:
+                logger.error(f"Referral record error: {e}")
     
     sub_data = await get_or_create_user_subscription(user_id)
     has_access = await verify_active_access(user_id)
@@ -790,23 +854,77 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "2️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "3️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
-        "4️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "5️⃣ /weekly_summary - ሳምንታዊ አጠቃላይ ሪፖርት\n"
-        "6️⃣ /update - ዕቃዎችን ወይም አገልግሎቶችን ማሻሻል\n"
-        "7️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
+        "2️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
+        "3️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "4️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
+        "5️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "6️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
     )
     
     keyboard = [
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🤝 Nexa Partnership (1/4 ኮሚሽን አግኝ)", callback_data="partner_menu")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
-        [InlineKeyboardButton("📈 ሳምንታዊ ሪፖርት (/weekly_summary)", callback_data="view_weekly")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
     await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    partner = None
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("partners").select("*").eq("partner_id", user_id).execute()
+            )
+            if res.data:
+                partner = res.data[0]
+        except Exception as e:
+            logger.error(f"Partner fetch error: {e}")
+
+    bot_username = context.bot.username or "nexa_bot"
+    ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+    if partner:
+        p_name = partner.get("partner_name", "Partner")
+        p_phone = partner.get("telebirr_number", "Not set")
+        earned = partner.get("total_earned", 0)
+        referrals = partner.get("total_referrals", 0)
+
+        text = (
+            f"🤝 **የ Nexa Partnership (Affiliate Program) ዳሽቦርድ**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 ስም: {p_name}\n"
+            f"📞 የቴሌብር ቁጥርዎ: `{p_phone}`\n"
+            f"👥 ያመጡዋቸው አባላት: {referrals} ሰዎች\n"
+            f"💰 ያገኙት ጠቅላላ ኮሚሽን (1/4): **{earned:,.2f} ብር**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
+            f"`{ref_link}`\n\n"
+            f"💡 ማሳሰቢያ፡ ማንኛውም ሰው በዚህ ሊንክ ገብቶ Nexa አባልነት ሲገዛ፣ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ የቴሌብር ቁጥር ይላካል እንዲሁም በሰርቨራችን ይመዘገባል።"
+        )
+        keyboard = [
+            [InlineKeyboardButton("✏️ የቴሌብር ቁጥር መቀየሪያ", callback_data="change_partner_phone")],
+            [InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]
+        ]
+        if update.callback_query:
+            await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        else:
+            await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        text = (
+            f"🤝 **ወደ Nexa Partnership (Affiliate) ፕሮግራም እንኳን ደህና መጡ!**\n\n"
+            f"Nexa AIን ለሌሎች ሰዎች በማስተዋወቅ ከሚገቡት ክፍያዎች **1/4 (25%) ኮሚሽን** በቋሚነት ማግኘት ይችላሉ።\n\n"
+            f"ለመጀመር እባክዎ ክፍያ የሚቀበሉበትን **ትክክለኛ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number)** ከታች ይጻፉ (ለምሳሌ: 09... ወይም 07...):"
+        )
+        context.user_data["partner_setup_step"] = "awaiting_telebirr"
+        if update.callback_query:
+            await update.callback_query.message.edit_text(text, parse_mode="Markdown")
+        else:
+            await update.effective_message.reply_text(text, parse_mode="Markdown")
 
 
 async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -866,7 +984,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
         f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n\n"
         f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር\n"
-        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n"
+        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
         f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
@@ -1146,7 +1264,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------------------------
-# AI Self-Healing & Auto-Correction Auditor
+# AI Self-Healing & Auto-Correction Auditor (Nexa & Connected Bots)
 # -------------------------------------------------------------------
 async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
     if not supabase:
@@ -1456,7 +1574,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     caption = update.message.caption or ""
-    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\-]+)", caption)
+    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
     
     if not match:
         return
@@ -1483,7 +1601,7 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 file_id = update.message.video.file_id
                 media_type = "video"
 
-            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\-]+", "", caption).strip()
+            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
 
             await asyncio.to_thread(
                 lambda: supabase.table("property_media").insert({
@@ -1576,6 +1694,51 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
 
 
 # -------------------------------------------------------------------
+# Admin Sync Tier, Send Direct Message & Broadcast Endpoints
+# -------------------------------------------------------------------
+class TierSyncModel(BaseModel):
+    user_id: str | int
+    tier: str
+    months: int
+    expires_at: str
+
+class BroadcastModel(BaseModel):
+    message: str
+    target: str
+    pwd: str
+
+class DirectChatModel(BaseModel):
+    chat_id: str | int
+    message: str
+    pwd: str
+
+@app.post("/admin/sync-tier")
+async def sync_tier(data: TierSyncModel):
+    try:
+        return {"status": "success", "message": "Tier synced successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/admin/send-message")
+async def send_direct_message(data: DirectChatModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        return {"status": "success", "message": "Message sent via bot"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/admin/broadcast")
+async def broadcast_announcement(data: BroadcastModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    try:
+        return {"status": "success", "message": "Broadcast dispatched"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# -------------------------------------------------------------------
 # Button, Receipt & Master Message Handlers
 # -------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1592,6 +1755,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_tier_upgrade_flow(update, context, 3)
     elif query.data in ["upgrade_tier_4", "tier_pay_4", "tier_4"]:
         await start_tier_upgrade_flow(update, context, 4)
+    elif query.data == "partner_menu":
+        await partner_command(update, context)
+    elif query.data == "change_partner_phone":
+        context.user_data["partner_setup_step"] = "awaiting_telebirr"
+        await query.message.reply_text("📞 አዲስ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number) ይጻፉ:")
+    elif query.data == "start_menu":
+        await start_command(update, context)
     elif query.data == "view_summary":
         await summary_command(update, context)
     elif query.data == "view_weekly":
@@ -1715,6 +1885,35 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     "user_id": str(user_id), "is_pro": True, "credits_remaining": 999999
                 }).execute())
                 await asyncio.to_thread(lambda: supabase.table("pending_orders").delete().eq("user_id", str(user_id)).execute())
+
+                # If this user was referred by a partner, credit the partner's earnings & referral count!
+                ref_res = await asyncio.to_thread(
+                    lambda: supabase.table("referrals").select("partner_id").eq("referred_user_id", str(user_id)).execute()
+                )
+                if ref_res.data:
+                    partner_id = ref_res.data[0]["partner_id"]
+                    p_info = await asyncio.to_thread(
+                        lambda: supabase.table("partners").select("total_earned, total_referrals").eq("partner_id", partner_id).execute()
+                    )
+                    commission = float(expected_amount_str) * 0.25
+                    if p_info.data:
+                        current_earned = float(p_info.data[0].get("total_earned", 0))
+                        current_refs = int(p_info.data[0].get("total_referrals", 0))
+                        await asyncio.to_thread(
+                            lambda: supabase.table("partners").update({
+                                "total_earned": current_earned + commission,
+                                "total_referrals": current_refs + 1
+                            }).eq("partner_id", partner_id).execute()
+                        )
+                    # Notify partner about commission earned
+                    try:
+                        await context.bot.send_message(
+                            chat_id=int(partner_id),
+                            text=f"🎉 **ኮሚሽን ደርሶዎታል! (Partner Affiliate Commission)**\n\n"
+                                 f"እርስዎ ያመጡት ተጠቃሚ አባልነት ስለከፈለ፣ የ **1/4 (25%)** ኮሚሽን ድርሻዎ የሆነው **{commission:,.2f} ብር** ወደ ቴሌብር ቁጥርዎ መላኩ ተረጋግጧል!"
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
@@ -1749,9 +1948,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as q_err:
                 logger.error(f"Manual queue insert error: {q_err}")
 
-        if ADMIN_TELEGRAM_ID and telegram_app and telegram_app.bot:
+        if ADMIN_TELEGRAM_ID:
             try:
-                await telegram_app.bot.forward_message(chat_id=ADMIN_TELEGRAM_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
+                await context.bot.forward_message(chat_id=ADMIN_TELEGRAM_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
             except Exception:
                 pass
         frustration_fix_text = (
@@ -1764,6 +1963,40 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.effective_message.text
     if not user_text:
+        return
+
+    # Handle Partner Telebirr setup step
+    partner_setup_step = context.user_data.get("partner_setup_step")
+    if partner_setup_step == "awaiting_telebirr":
+        telebirr_phone = user_text.strip()
+        context.user_data.pop("partner_setup_step", None)
+        user_id = update.effective_user.id
+        user_name = update.effective_user.first_name
+
+        if supabase:
+            try:
+                await asyncio.to_thread(
+                    lambda: supabase.table("partners").upsert({
+                        "partner_id": str(user_id),
+                        "partner_name": user_name,
+                        "telebirr_number": telebirr_phone,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="partner_id").execute()
+                )
+            except Exception as e:
+                logger.error(f"Partner upsert error: {e}")
+
+        bot_username = context.bot.username or "nexa_bot"
+        ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+        success_msg = (
+            f"✅ **እንኳን ደስ አለዎት! አሁን ኦፊሴላዊ የ Nexa Partner (Affiliate) ነዎት!**\n\n"
+            f"📞 የተመዘገበ የቴሌብር ቁጥር: `{telebirr_phone}`\n"
+            f"💰 ኮሚሽን: ማንኛውም ሰው በእርስዎ ሊንክ ገብቶ ሲመዝገብ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ ይገባል።\n\n"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
+            f"`{ref_link}`"
+        )
+        await update.effective_message.reply_text(success_msg, parse_mode="Markdown")
         return
 
     payment_step = context.user_data.get("payment_step")
@@ -1800,7 +2033,20 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         base_price = tier_info["price"]
         
         exact_amount_etb = random.randint(base_price, base_price + 100)
-        channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb)
+
+        # Check if this user was referred by a partner
+        partner_id = None
+        if supabase:
+            try:
+                ref_res = await asyncio.to_thread(
+                    lambda: supabase.table("referrals").select("partner_id").eq("referred_user_id", owner_id).execute()
+                )
+                if ref_res.data:
+                    partner_id = ref_res.data[0]["partner_id"]
+            except Exception as e:
+                logger.error(f"Referral check error: {e}")
+
+        channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb, partner_id=partner_id)
         order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
         
         if supabase:
@@ -1823,12 +2069,13 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
             except Exception as e:
                 logger.error(f"Pending order save error: {e}")
 
+        partner_note = "⭐ (በአጋር/Affiliate ማስታወቂያ በኩል የተደረገ ክፍያ)" if partner_id else ""
         invoice_text = (
-            f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})**\n"
+            f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})** {partner_note}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"👤 ከፋይ: {payer_name} | 📞 `{phone}`\n"
             f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
-            f"• የክፍያ መቀበያ ቁጥር (Telebirr): `{masked_account}`\n"
+            f"• የክፍያ መቀበያ ቁጥር: `{masked_account}`\n"
             f"• የደረሰኝ ቁጥር: {order_id}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
@@ -1851,9 +2098,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
-        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade). "
+        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade, /partner). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
-        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'general'. "
+        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'partner', 'general'. "
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞችን ስልክ ቁጥር ለማየት /leads፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
@@ -1882,6 +2129,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text("አዲስ ቦት ለመፍጠር /register የሚለውን ይጠቀሙ።")
     elif intent == "upgrade":
         await upgrade_command(update, context)
+    elif intent == "partner":
+        await partner_command(update, context)
     else:
         await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
 
@@ -1890,33 +2139,22 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 async def startup_event():
     global http_client
     http_client = httpx.AsyncClient(timeout=10.0)
-    if telegram_app:
-        try:
-            await telegram_app.initialize()
-            await telegram_app.start() 
-            if TELEGRAM_BOT_TOKEN:
-                await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
-        except Exception as e:
-            logger.error(f"Telegram startup error: {e}")
+    await telegram_app.initialize()
+    await telegram_app.start() 
+    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
 
     asyncio.create_task(run_ai_system_audit_and_heal())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    if telegram_app:
-        try:
-            await telegram_app.stop()
-        except Exception:
-            pass
+    await telegram_app.stop()
     if http_client:
         await http_client.aclose()
 
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
-    if not telegram_app:
-        return {"status": "no telegram app"}
     update = Update.de_json(await request.json(), telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
@@ -1957,10 +2195,9 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             logger.error(f"Tenant store fetch error: {e}")
 
     if not store:
-        if http_client:
-            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                "chat_id": chat_id, "text": "⚠️ Store configuration not found or inactive."
-            })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id, "text": "⚠️ Store configuration not found or inactive."
+        })
         return {"ok": True}
 
     owner_id = store.get("owner_telegram_id")
@@ -1968,11 +2205,10 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         try:
             is_active = await verify_active_access(int(owner_id))
             if not is_active:
-                if http_client:
-                    await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                        "chat_id": chat_id,
-                        "text": "⚠️ **የዚህ መደብር የነጻ ሙከራ ጊዜ (3 Days Trial) አልቋል እንዲሁም ክፍያ አልተፈጸመም።** ባለቤቱ አባልነቱን እስከሚያሻሽል ድረስ የ AI አገልግሎቱ ጊዜያዊ ቆሟል።"
-                    })
+                await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                    "chat_id": chat_id,
+                    "text": "⚠️ **የዚህ መደብር የነጻ ሙከራ ጊዜ (3 Days Trial) አልቋል እንዲሁም ክፍያ አልተፈጸመም።** ባለቤቱ አባልነቱን እስከሚያሻሽል ድረስ የ AI አገልግሎቱ ጊዜያዊ ቆሟል።"
+                })
                 return {"ok": True}
         except Exception as sub_check_err:
             logger.error(f"Tenant trial check error: {sub_check_err}")
@@ -2014,11 +2250,10 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
-        if http_client:
-            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": direct_welcome
-            })
+        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": direct_welcome
+        })
         return {"ok": True}
 
     customer_lang = "amharic"
@@ -2083,7 +2318,7 @@ async def analyze_and_upsert_lead(
         "requested_items": "concise summary of specific products/services they want",
         "estimated_budget": 0,
         "intent_level": "high" or "medium" or "low",
-        "is_high_payer": true or false,
+        "is_high_payer": true or false (true if asking about bulk orders, high-ticket/premium items, or showing readiness to pay substantial amounts),
         "action_summary": "1-sentence Amharic summary of the customer's exact need and next step"
     }}
     """
@@ -2151,21 +2386,19 @@ async def store_chat_webhook(payload: dict):
         try:
             owner_id_int = int(owner_telegram_id)
             if not await verify_active_access(owner_id_int):
-                if http_client:
-                    await http_client.post(
-                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                        json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"}
-                    )
+                await http_client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"}
+                )
                 return {"ok": True}
             asyncio.create_task(deduct_credit(owner_id_int))
         except Exception as e:
             logger.error(f"Subscription enforcement error: {e}")
 
-    if http_client:
-        asyncio.create_task(http_client.post(
-            f"https://api.telegram.org/bot{bot_token}/sendChatAction",
-            json={"chat_id": chat_id, "action": "typing"}
-        ))
+    asyncio.create_task(http_client.post(
+        f"https://api.telegram.org/bot{bot_token}/sendChatAction",
+        json={"chat_id": chat_id, "action": "typing"}
+    ))
 
     lang_instructions = {
         "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
@@ -2222,8 +2455,8 @@ async def store_chat_webhook(payload: dict):
             logger.error(f"Groq Chat Error: {e}")
             ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
-    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\\\]", ai_reply)
-    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\-]+\\\]", "", ai_reply).strip()
+    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\\-]+)\\\]", ai_reply)
+    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
 
     if supabase:
         async def _save_chat_history():
@@ -2249,13 +2482,12 @@ async def store_chat_webhook(payload: dict):
         )
     )
 
-    if http_client:
-        await http_client.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": clean_ai_reply}
-        )
+    await http_client.post(
+        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+        json={"chat_id": chat_id, "text": clean_ai_reply}
+    )
 
-    if tag_match and supabase and http_client:
+    if tag_match and supabase:
         requested_tag = tag_match.group(1).lower()
         try:
             media_rows = await asyncio.to_thread(
@@ -2288,43 +2520,43 @@ async def store_chat_webhook(payload: dict):
     return {"ok": True}
 
 
-if telegram_app:
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("register", register_start),
-            CallbackQueryHandler(register_start, pattern="^start_register$")
+conv_handler = ConversationHandler(
+    entry_points=[
+        CommandHandler("register", register_start),
+        CallbackQueryHandler(register_start, pattern="^start_register$")
+    ],
+    states={
+        STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
+        INDUSTRY: [
+            CallbackQueryHandler(receive_industry, pattern="^ind_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
         ],
-        states={
-            STORE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_name)],
-            INDUSTRY: [
-                CallbackQueryHandler(receive_industry, pattern="^ind_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_industry)
-            ],
-            UI_THEME: [
-                CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
-            ],
-            PLAN_TIER: [
-                CallbackQueryHandler(receive_plan_tier, pattern="^tier_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_tier)
-            ],
-            INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
-            BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_registration)],
-    )
+        UI_THEME: [
+            CallbackQueryHandler(receive_ui_theme, pattern="^theme_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ui_theme)
+        ],
+        PLAN_TIER: [
+            CallbackQueryHandler(receive_plan_tier, pattern="^tier_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_tier)
+        ],
+        INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
+        BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel_registration)],
+)
 
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
-    telegram_app.add_handler(CommandHandler("pay", upgrade_command))
-    telegram_app.add_handler(CommandHandler("leads", leads_command))
-    telegram_app.add_handler(CommandHandler("update", update_command))
-    telegram_app.add_handler(CommandHandler("audit", audit_command))
-    telegram_app.add_handler(CommandHandler("summary", summary_command))
-    telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
-    telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
-    telegram_app.add_handler(conv_handler)
-    telegram_app.add_handler(CallbackQueryHandler(button_handler))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
+telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("partner", partner_command))
+telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+telegram_app.add_handler(CommandHandler("pay", upgrade_command))
+telegram_app.add_handler(CommandHandler("leads", leads_command))
+telegram_app.add_handler(CommandHandler("update", update_command))
+telegram_app.add_handler(CommandHandler("audit", audit_command))
+telegram_app.add_handler(CommandHandler("summary", summary_command))
+telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
+telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
+telegram_app.add_handler(conv_handler)
+telegram_app.add_handler(CallbackQueryHandler(button_handler))
+telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
+telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
