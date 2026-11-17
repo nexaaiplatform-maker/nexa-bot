@@ -117,6 +117,7 @@ STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
 PARTNER_TELEBIRR = 100  # Conversation state for setting partner telebirr account
 STORE_PHONE = 101       # Conversation state for capturing store business / owner phone
 CHANGE_PHONE = 102      # Conversation state for updating existing store phone
+SUPPORT_TICKET = 103    # Conversation state for submitting customer support tickets
 
 
 # -------------------------------------------------------------------
@@ -308,21 +309,23 @@ async def admin_dashboard(pwd: str = ""):
         </html>
         """
 
-    manual_reviews, stores_data, subs_data, leads_data, partners_data = [], [], [], [], []
+    manual_reviews, stores_data, subs_data, leads_data, partners_data, support_tickets = [], [], [], [], [], []
     if supabase:
         try:
-            r1, r2, r3, r4, r5 = await asyncio.gather(
+            r1, r2, r3, r4, r5, r6 = await asyncio.gather(
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").select("*").order("created_at", desc=True).limit(30).execute()),
                 asyncio.to_thread(lambda: supabase.table("stores").select("*").execute()),
                 asyncio.to_thread(lambda: supabase.table("subscriptions").select("*").execute()),
                 asyncio.to_thread(lambda: supabase.table("leads").select("*").order("updated_at", desc=True).limit(40).execute()),
-                asyncio.to_thread(lambda: supabase.table("partners").select("*").execute())
+                asyncio.to_thread(lambda: supabase.table("partners").select("*").execute()),
+                asyncio.to_thread(lambda: supabase.table("support_tickets").select("*").order("created_at", desc=True).limit(30).execute())
             )
             manual_reviews = r1.data or []
             stores_data = r2.data or []
             subs_data = r3.data or []
             leads_data = r4.data or []
             partners_data = r5.data or []
+            support_tickets = r6.data or []
         except Exception as e:
             logger.error(f"Admin fetch error: {e}")
 
@@ -357,6 +360,23 @@ async def admin_dashboard(pwd: str = ""):
             <td class="p-4">{img_btn}</td>
             <td class="p-4">{status_lbl}</td>
             <td class="p-4">{actions}</td>
+        </tr>
+        """
+
+    tickets_html = ""
+    for t in support_tickets:
+        t_status = t.get("status", "open")
+        status_lbl = '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400">Resolved</span>' if t_status == "resolved" else '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400">Open Ticket</span>'
+        reply_txt = t.get("admin_reply") or "No reply yet"
+        tickets_html += f"""
+        <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
+            <td class="p-4 font-mono text-xs text-slate-400">{t.get('user_id')}</td>
+            <td class="p-4 text-slate-200 text-sm max-w-xs">{t.get('message')}</td>
+            <td class="p-4 text-slate-400 text-xs italic max-w-xs">{reply_txt}</td>
+            <td class="p-4">{status_lbl}</td>
+            <td class="p-4">
+                <button onclick="openSupportModal('{t.get('id')}', '{t.get('user_id')}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reply ✉️</button>
+            </td>
         </tr>
         """
 
@@ -442,6 +462,18 @@ async def admin_dashboard(pwd: str = ""):
             </section>
 
             <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>🎧</span> Customer Support & Helpdesk Tickets ({len(support_tickets)})</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
+                            <th class="p-4">User Telegram ID</th><th class="p-4">User Inquiry / Ticket</th><th class="p-4">Admin Reply</th><th class="p-4">Status</th><th class="p-4">Action</th>
+                        </tr>
+                        {tickets_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No support tickets submitted yet.</td></tr>'}
+                    </table>
+                </div>
+            </section>
+
+            <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><span>🤝</span> Nexa Partners / Affiliates Program ({len(partners_data)})</h3>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse">
@@ -490,6 +522,26 @@ async def admin_dashboard(pwd: str = ""):
             </section>
         </main>
 
+        <!-- Support Ticket Modal -->
+        <div id="supportModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-4">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2"><span>✉️</span> Reply to Customer Support Ticket</h3>
+                <p id="supportModalSub" class="text-xs text-slate-400">Send direct response to user.</p>
+                <form id="supportForm" onsubmit="submitSupportReply(event)" class="space-y-4">
+                    <input type="hidden" id="supportTicketId">
+                    <input type="hidden" id="supportUserId">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Your Reply Message:</label>
+                        <textarea id="supportReplyText" rows="4" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white text-xs focus:outline-none focus:border-blue-500" placeholder="Type your support reply here..." required></textarea>
+                    </div>
+                    <div class="flex gap-3 pt-2">
+                        <button type="button" onclick="closeSupportModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-semibold transition">Cancel</button>
+                        <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2.5 rounded-xl text-xs font-semibold transition shadow-lg shadow-blue-600/30">Send Reply 🚀</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- Sync Tier Modal -->
         <div id="syncModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
             <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-4">
@@ -519,6 +571,42 @@ async def admin_dashboard(pwd: str = ""):
         </div>
 
         <script>
+            function openSupportModal(ticketId, userId) {{
+                document.getElementById("supportTicketId").value = ticketId;
+                document.getElementById("supportUserId").value = userId;
+                document.getElementById("supportModalSub").innerText = "Replying to User Telegram ID: " + userId;
+                document.getElementById("supportModal").classList.remove("hidden");
+            }}
+
+            function closeSupportModal() {{
+                document.getElementById("supportModal").classList.add("hidden");
+            }}
+
+            async function submitSupportReply(e) {{
+                e.preventDefault();
+                const ticketId = document.getElementById("supportTicketId").value;
+                const userId = document.getElementById("supportUserId").value;
+                const replyText = document.getElementById("supportReplyText").value;
+
+                try {{
+                    const resp = await fetch("/admin/support-reply", {{
+                        method: "POST",
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{pwd}" }})
+                    }});
+                    const data = await resp.json();
+                    if (data.status === "success") {{
+                        alert("Support reply sent successfully to customer!");
+                        closeSupportModal();
+                        window.location.reload();
+                    }} else {{
+                        alert("Error: " + (data.message || "Failed to send reply"));
+                    }}
+                }} catch (err) {{
+                    alert("Network error: " + err);
+                }}
+            }}
+
             function openSyncModal(userId, storeName, currentTier) {{
                 document.getElementById("syncUserId").value = userId;
                 document.getElementById("syncTierNum").value = currentTier;
@@ -943,16 +1031,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
         "2️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ\n"
         "3️⃣ /startvoice / /stopvoice - የ AI ድምጽ ስልክ ረዳት አገልግሎትን ያስጀምሩ ወይም ያቁሙ\n"
-        "4️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
-        "5️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "6️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
-        "7️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "8️⃣ /pay - አባልነትዎን ያሻሽሉ"
+        "4️⃣ /support - የደንበኞች ድጋፍ (Customer Support) ቲኬት ይክፈቱ\n"
+        "5️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
+        "6️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "7️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
+        "8️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "9️⃣ /pay - አባልነትዎን ያሻሽሉ"
     )
     
     keyboard = [
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
         [InlineKeyboardButton("📞 የንግድ ስልክ ቁጥር ማስተካከያ (/setphone)", callback_data="change_partner_phone")],
+        [InlineKeyboardButton("🎧 የደንበኞች ድጋፍ / Support (/support)", callback_data="support_menu")],
         [InlineKeyboardButton("🤝 Nexa Partnership (1/4 ኮሚሽን አግኝ)", callback_data="partner_menu")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
@@ -960,6 +1050,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
     ]
     await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        f"🎧 **የ Nexa AI የደንበኞች ድጋፍ ማዕከል (Customer Support Helpdesk)**\n\n"
+        f"ማንኛውም ጥያቄ፣ የቴክኒክ እገዛ ወይም የክፍያ ማስተካከያ ከፈለጉ እባክዎ ጥያቄዎን ወይም ችግርዎን ከታች ይጻፉ። "
+        f"የእኛ የድጋፍ ቡድን እና AI ረዳት ወዲያውኑ ምላሽ ይሰጡዎታል!"
+    )
+    context.user_data["support_ticket_step"] = "awaiting_ticket_message"
+    
+    keyboard = [[InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]]
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1930,7 +2036,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
 
 
 # -------------------------------------------------------------------
-# Admin Sync Tier, Send Direct Message & Broadcast Endpoints
+# Admin Sync Tier, Support Reply & Broadcast Endpoints
 # -------------------------------------------------------------------
 class TierSyncModel(BaseModel):
     user_id: str | int
@@ -1947,6 +2053,50 @@ class DirectChatModel(BaseModel):
     chat_id: str | int
     message: str
     pwd: str
+
+class SupportReplyModel(BaseModel):
+    ticket_id: str | int
+    user_id: str | int
+    reply: str
+    pwd: str
+
+@app.post("/admin/support-reply")
+async def admin_support_reply(data: SupportReplyModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("support_tickets").update({
+                    "admin_reply": data.reply,
+                    "status": "resolved"
+                }).eq("id", data.ticket_id).execute()
+            )
+        except Exception as e:
+            logger.error(f"Support reply DB update error: {e}")
+
+    try:
+        reply_msg = (
+            f"🎧 **NEXA CUSTOMER SUPPORT REPLY**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{data.reply}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✨ አስተያየትዎ ወይም ጥያቄዎ ተመልሷል። እናመሰግናለን!"
+        )
+        await http_client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": int(data.user_id),
+                "text": reply_msg,
+                "parse_mode": "Markdown"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Support Telegram notification error: {e}")
+        return {"status": "error", "message": str(e)}
+
+    return {"status": "success", "message": "Support reply sent successfully"}
 
 @app.post("/admin/sync-tier")
 async def sync_tier(data: TierSyncModel):
@@ -2037,6 +2187,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_tier_upgrade_flow(update, context, 4)
     elif query.data == "partner_menu":
         await partner_command(update, context)
+    elif query.data == "support_menu":
+        await support_command(update, context)
     elif query.data == "change_partner_phone":
         context.user_data["partner_setup_step"] = "awaiting_telebirr"
         await query.message.reply_text("📞 አዲስ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number) ይጻፉ:")
@@ -2247,6 +2399,44 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
+    support_step = context.user_data.get("support_ticket_step")
+    if support_step == "awaiting_ticket_message":
+        ticket_msg = user_text.strip()
+        context.user_data.pop("support_ticket_step", None)
+        user_id = update.effective_user.id
+        
+        if supabase:
+            try:
+                await asyncio.to_thread(
+                    lambda: supabase.table("support_tickets").insert({
+                        "user_id": str(user_id),
+                        "message": ticket_msg,
+                        "status": "open",
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    }).execute()
+                )
+            except Exception as e:
+                logger.error(f"Support ticket insert error: {e}")
+
+        if ADMIN_TELEGRAM_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(ADMIN_TELEGRAM_ID),
+                    text=f"🎧 **NEW SUPPORT TICKET**\n\n"
+                         f"• User ID: `{user_id}`\n"
+                         f"• Message: {ticket_msg}\n\n"
+                         f"Please check Web Admin Dashboard to reply.",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+        await update.effective_message.reply_text(
+            "✅ **የድጋፍ ቲኬትዎ (Support Ticket) በተሳካ ሁኔታ ተልኳል!**\n\n"
+            "የአስተዳደር ቡድናችን መልእክትዎን ተቀብሏል። በአጭር ጊዜ ውስጥ ምላሽ እንሰጥዎታለን። እናመሰግናለን!"
+        )
+        return
+
     partner_setup_step = context.user_data.get("partner_setup_step")
     if partner_setup_step == "awaiting_telebirr":
         telebirr_phone = user_text.strip()
@@ -2378,12 +2568,12 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
         "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
-        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /register, /upgrade, /partner, /setphone, /startvoice, /stopvoice). "
+        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone, /startvoice, /stopvoice). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
-        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'register', 'upgrade', 'partner', 'setphone', 'voice', 'general'. "
+        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'voice', 'general'. "
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
-    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ ስልክ ቁጥር ለመቀየር /setphone፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
+    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞች ድጋፍ ለማግኘት /support፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
@@ -2405,6 +2595,8 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         await summary_command(update, context)
     elif intent == "weekly":
         await weekly_summary_command(update, context)
+    elif intent == "support":
+        await support_command(update, context)
     elif intent == "register":
         await update.effective_message.reply_text("አዲስ ቦት ለመፍጠር /register የሚለውን ይጠቀሙ።")
     elif intent == "upgrade":
@@ -2414,7 +2606,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif intent == "setphone":
         await setphone_command(update, context)
     else:
-        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
+        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ወይም ድጋፍ ለማግኘት /support ይጠቀሙ።"))
 
 
 @app.on_event("startup")
@@ -2831,6 +3023,7 @@ conv_handler = ConversationHandler(
 )
 
 telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("support", support_command))
 telegram_app.add_handler(CommandHandler("partner", partner_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
 telegram_app.add_handler(CommandHandler("pay", upgrade_command))
