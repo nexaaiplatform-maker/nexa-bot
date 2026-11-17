@@ -905,8 +905,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(timezone.utc)
     remaining_days = max(0, (trial_exp - now).days)
     
+    # Check if user has an active store and get its tier
+    store_tier_name = "Starter"
+    if supabase:
+        try:
+            store_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("plan_tier").eq("owner_telegram_id", str(user_id)).execute()
+            )
+            if store_res.data:
+                tier_num = store_res.data[0].get("plan_tier", 1)
+                store_tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
+        except Exception as e:
+            logger.error(f"Store tier check error: {e}")
+
     if sub_data["is_pro"]:
-        status_text = "⭐ ፕሮ አባል (VIP Elite Pro) — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ。"
+        status_text = f"⭐ ፕሮ አባል (VIP Elite Pro — {store_tier_name}) — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ።"
     elif has_access:
         fomo_hook = ""
         if remaining_days <= 2:
