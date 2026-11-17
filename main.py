@@ -726,12 +726,22 @@ async def admin_payment_action(
     if supabase:
         if decision == "approve":
             credits = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["credits"]
+            tier_price = float(TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["price"])
             await asyncio.gather(
                 asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
-                    "user_id": user_id, "is_pro": True, "credits_remaining": credits
+                    "user_id": user_id, "is_pro": True, "plan_tier": plan_tier, "credits_remaining": credits
                 }).execute()),
                 asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
+            )
+            # Record financial split & affiliate 25% share if user was referred
+            await record_affiliate_commission_and_revenue(
+                user_id=str(user_id),
+                amount_etb=tier_price,
+                plan_tier=plan_tier,
+                order_id=f"MANUAL-{review_id}",
+                channel="MANUAL_APPROVED",
+                reference_id=f"REV-{review_id}"
             )
             await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
                 "chat_id": int(user_id),
@@ -747,104 +757,94 @@ async def admin_payment_action(
     return RedirectResponse(url=f"/admin?pwd={pwd}", status_code=303)
 
 
-@app.post("/admin/broadcast")
-async def admin_broadcast_message(request: Request):
+# -------------------------------------------------------------------
+# Centralized Revenue & Affiliate 25% / 75% Split Recorder
+# -------------------------------------------------------------------
+async def record_affiliate_commission_and_revenue(
+    user_id: str,
+    amount_etb: float,
+    plan_tier: int,
+    order_id: str,
+    channel: str,
+    reference_id: str,
+    bot_instance=None
+):
+    """
+    Records total revenue collected, checks if user came via an affiliate link,
+    calculates 25% (1/4) for the affiliate and 75% (3/4) net for the platform owner,
+    and updates referrals + partners ledgers in Supabase.
+    """
+    if not supabase:
+        return
+
     try:
-        data = await request.json()
-        message_text = data.get("message") or data.get("message_text", "")
-        target = data.get("target", "all")
-        pwd = data.get("pwd", "")
-    except Exception:
-        form = await request.form()
-        message_text = form.get("message_text", "") or form.get("message", "")
-        target = form.get("target", "all")
-        pwd = form.get("pwd", "")
+        # 1. Log into paid_subscriptions for total platform income tracking
+        await asyncio.to_thread(lambda: supabase.table("paid_subscriptions").insert({
+            "user_id": str(user_id),
+            "order_id": order_id,
+            "amount_etb": float(amount_etb),
+            "channel": channel,
+            "reference_id": reference_id
+        }).execute())
 
-    if pwd != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=403, detail="Unauthorized")
+        # 2. Check if this user was referred by an affiliate
+        ref_res = await asyncio.to_thread(
+            lambda: supabase.table("referrals").select("*").eq("referred_user_id", str(user_id)).execute()
+        )
+        if ref_res.data:
+            ref_row = ref_res.data[0]
+            partner_id = str(ref_row["partner_id"])
+            commission = round(float(amount_etb) * 0.25, 2)   # 1/4 Affiliate Share
+            owner_net = round(float(amount_etb) - commission, 2) # 3/4 Your Net Profit
 
-    if not message_text:
-        return {"status": "error", "message": "Message is required"}
+            prev_paid = float(ref_row.get("amount_paid") or 0)
+            prev_comm = float(ref_row.get("commission_amount") or 0)
+            prev_net = float(ref_row.get("owner_net_amount") or 0)
 
-    sent_count = 0
-    if supabase:
-        try:
-            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
-            stores_list = stores_res.data or []
+            # Update referral record with tier, total paid, 25% commission & 75% owner net
+            await asyncio.to_thread(
+                lambda: supabase.table("referrals").update({
+                    "plan_tier": plan_tier,
+                    "amount_paid": prev_paid + float(amount_etb),
+                    "commission_amount": prev_comm + commission,
+                    "owner_net_amount": prev_net + owner_net,
+                    "payout_status": "pending",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("referred_user_id", str(user_id)).execute()
+            )
 
-            owner_ids = set()
-            for s in stores_list:
-                owner_id = s.get("owner_telegram_id")
-                if not owner_id:
-                    continue
-                tier = int(s.get("plan_tier", 1))
-                if target == "paid" and tier < 2:
-                    continue
-                elif target == "free" and tier >= 2:
-                    continue
-                owner_ids.add(owner_id)
+            # Update affiliate's cumulative earnings & referral count
+            p_info = await asyncio.to_thread(
+                lambda: supabase.table("partners").select("total_earned, total_referrals").eq("partner_id", partner_id).execute()
+            )
+            if p_info.data:
+                current_earned = float(p_info.data[0].get("total_earned") or 0)
+                current_refs = int(p_info.data[0].get("total_referrals") or 0)
+                is_first_payment = prev_paid == 0
+                await asyncio.to_thread(
+                    lambda: supabase.table("partners").update({
+                        "total_earned": current_earned + commission,
+                        "total_referrals": current_refs + (1 if is_first_payment else 0)
+                    }).eq("partner_id", partner_id).execute()
+                )
 
-            for owner_id in owner_ids:
-                try:
-                    announcement_text = (
-                        f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"{message_text}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"✨ Powered by Nexa AI Elite Commerce"
-                    )
-                    await http_client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                        json={
-                            "chat_id": int(owner_id),
-                            "text": announcement_text,
-                            "parse_mode": "Markdown"
-                        }
-                    )
-                    sent_count += 1
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logger.error(f"Broadcast error for {owner_id}: {e}")
-        except Exception as err:
-            logger.error(f"Broadcast fetch error: {err}")
-
-    return {"status": "success", "sent": sent_count}
-
-
-# -------------------------------------------------------------------
-# Safe UTC Datetime Parser Helper
-# -------------------------------------------------------------------
-def parse_dt(dt_val) -> datetime:
-    if isinstance(dt_val, datetime):
-        return dt_val if dt_val.tzinfo else dt_val.replace(tzinfo=timezone.utc)
-    if not dt_val:
-        return datetime.now(timezone.utc)
-    try:
-        dt = datetime.fromisoformat(str(dt_val).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return datetime.now(timezone.utc)
-
-
-# -------------------------------------------------------------------
-# Root Health Check (Supports GET and HEAD for UptimeRobot)
-# -------------------------------------------------------------------
-@app.get("/")
-@app.head("/")
-async def root_health_check():
-    return {"status": "healthy", "service": "Nexa AI Elite Multi-Bot Engine is live and optimized"}
-
-
-# -------------------------------------------------------------------
-# Core Logic: Persistent Trial, Credit & Visitor Engine (Supabase Backed)
-# -------------------------------------------------------------------
-async def get_or_create_user_subscription(user_id: int) -> dict:
-    now = datetime.now(timezone.utc)
-    if supabase:
-        try:
-            res = await asyncio.to_thread(
+            # Notify affiliate via Telegram
+            notify_text = (
+                f"🎉 **አዲስ የኮሚሽን ገቢ ተመዝግቧል! (Affiliate Commission)**\n\n"
+                f"• የተመዘገበው ደረጃ: **Tier {plan_tier}**\n"
+                f"• የተከፈለው ጠቅላላ መጠን: **{amount_etb:,.2f} ብር**\n"
+                f"• የእርስዎ 1/4 (25%) ኮሚሽን ድርሻ: **{commission:,.2f} ብር**\n"
+                f"• ሁኔታ: በአስተዳዳሪው በኩል ወደ ቴሌብር ቁጥርዎ ለመላክ ተመዝግቧል!"
+            )
+            if bot_instance:
+                await bot_instance.send_message(chat_id=int(partner_id), text=notify_text, parse_mode="Markdown")
+            elif http_client and TELEGRAM_BOT_TOKEN:
+                await http_client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode": "Markdown"}
+                )
+    except Exception as e:
+        logger.error(f"Affiliate revenue split calculation error: {e}")
                 lambda: supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
             )
             if res.data:
@@ -975,11 +975,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and args[0].startswith("ref_"):
         partner_id = args[0].replace("ref_", "")
-        if supabase:
+        referred_username = f"@{user.username}" if user.username else "No Username"
+        referred_full_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or f"User {user_id}"
+        if supabase and partner_id != str(user_id):
             try:
                 await asyncio.to_thread(
                     lambda: supabase.table("referrals").upsert({
                         "referred_user_id": str(user_id),
+                        "referred_username": referred_username,
+                        "referred_full_name": referred_full_name,
                         "partner_id": partner_id,
                         "created_at": datetime.now(timezone.utc).isoformat()
                     }, on_conflict="referred_user_id").execute()
@@ -2060,6 +2064,72 @@ class SupportReplyModel(BaseModel):
     reply: str
     pwd: str
 
+class AffiliatePayoutModel(BaseModel):
+    partner_id: str
+    amount_paid: float
+    reference_note: str = ""
+    pwd: str
+
+@app.post("/admin/record-payout")
+async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    if not supabase:
+        return {"status": "error", "message": "Supabase not connected"}
+
+    try:
+        p_res = await asyncio.to_thread(
+            lambda: supabase.table("partners").select("*").eq("partner_id", str(data.partner_id)).execute()
+        )
+        if not p_res.data:
+            return {"status": "error", "message": "Partner not found"}
+
+        partner = p_res.data[0]
+        prev_paid_out = float(partner.get("paid_out") or 0)
+        new_paid_out = prev_paid_out + float(data.amount_paid)
+
+        await asyncio.gather(
+            asyncio.to_thread(lambda: supabase.table("partners").update({
+                "paid_out": new_paid_out
+            }).eq("partner_id", str(data.partner_id)).execute()),
+            asyncio.to_thread(lambda: supabase.table("affiliate_payouts").insert({
+                "partner_id": str(data.partner_id),
+                "partner_name": partner.get("partner_name", "Partner"),
+                "telebirr_number": partner.get("telebirr_number", ""),
+                "amount_paid": float(data.amount_paid),
+                "reference_note": data.reference_note or "Manual Telebirr Transfer"
+            }).execute()),
+            asyncio.to_thread(lambda: supabase.table("referrals").update({
+                "payout_status": "paid"
+            }).eq("partner_id", str(data.partner_id)).eq("payout_status", "pending").execute())
+        )
+
+        # Notify Affiliate on Telegram that their payout was sent
+        try:
+            await http_client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": int(data.partner_id),
+                    "text": (
+                        f"💸 **የኮሚሽን ክፍያ ተልኳል! (Affiliate Payout Sent)**\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"• የተላከው መጠን: **{float(data.amount_paid):,.2f} ብር**\n"
+                        f"• መቀበያ ቴሌብር: `{partner.get('telebirr_number', 'N/A')}`\n"
+                        f"• ማስታወሻ / Ref: `{data.reference_note or 'Telebirr Payout'}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✨ ከ Nexa AI ጋር አብረው ስለሚሰሩ እናመሰግናለን!"
+                    ),
+                    "parse_mode": "Markdown"
+                }
+            )
+        except Exception as tg_err:
+            logger.error(f"Payout Telegram notification error: {tg_err}")
+
+        return {"status": "success", "new_paid_out": new_paid_out}
+    except Exception as e:
+        logger.error(f"Record payout error: {e}")
+        return {"status": "error", "message": str(e)}
+
 @app.post("/admin/support-reply")
 async def admin_support_reply(data: SupportReplyModel):
     if data.pwd != ADMIN_PANEL_PASSWORD:
@@ -2309,45 +2379,30 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if parsed_result.get("valid") and amount_matches and ref_id:
         if supabase:
             try:
+                store_tier = 1
+                s_res = await asyncio.to_thread(lambda: supabase.table("stores").select("plan_tier").eq("owner_telegram_id", str(user_id)).limit(1).execute())
+                if s_res.data:
+                    store_tier = int(s_res.data[0].get("plan_tier") or 1)
+
                 await asyncio.to_thread(lambda: supabase.table("processed_receipts").insert({
                     "user_id": str(user_id), "order_id": order["order_id"], "reference_id": ref_id,
                     "amount": expected_amount_str, "channel": order["channel"], "created_at": datetime.now(timezone.utc).isoformat()
                 }).execute())
-                await asyncio.to_thread(lambda: supabase.table("paid_subscriptions").insert({
-                    "user_id": str(user_id), "order_id": order["order_id"], "amount_etb": float(expected_amount_str),
-                    "channel": order.get("destination_code", "TELEBIRR"), "reference_id": ref_id
-                }).execute())
                 await asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
-                    "user_id": str(user_id), "is_pro": True, "credits_remaining": 999999
+                    "user_id": str(user_id), "is_pro": True, "plan_tier": store_tier, "credits_remaining": 999999
                 }).execute())
                 await asyncio.to_thread(lambda: supabase.table("pending_orders").delete().eq("user_id", str(user_id)).execute())
 
-                ref_res = await asyncio.to_thread(
-                    lambda: supabase.table("referrals").select("partner_id").eq("referred_user_id", str(user_id)).execute()
+                # Record total income + automatic 25% affiliate / 75% owner net split
+                await record_affiliate_commission_and_revenue(
+                    user_id=str(user_id),
+                    amount_etb=float(expected_amount_str),
+                    plan_tier=store_tier,
+                    order_id=order["order_id"],
+                    channel=order.get("destination_code", "TELEBIRR"),
+                    reference_id=ref_id,
+                    bot_instance=context.bot
                 )
-                if ref_res.data:
-                    partner_id = ref_res.data[0]["partner_id"]
-                    p_info = await asyncio.to_thread(
-                        lambda: supabase.table("partners").select("total_earned, total_referrals").eq("partner_id", partner_id).execute()
-                    )
-                    commission = float(expected_amount_str) * 0.25
-                    if p_info.data:
-                        current_earned = float(p_info.data[0].get("total_earned", 0))
-                        current_refs = int(p_info.data[0].get("total_referrals", 0))
-                        await asyncio.to_thread(
-                            lambda: supabase.table("partners").update({
-                                "total_earned": current_earned + commission,
-                                "total_referrals": current_refs + 1
-                            }).eq("partner_id", partner_id).execute()
-                        )
-                    try:
-                        await context.bot.send_message(
-                            chat_id=int(partner_id),
-                            text=f"🎉 **ኮሚሽን ደርሶዎታል! (Partner Affiliate Commission)**\n\n"
-                                 f"እርስዎ ያመጡት ተጠቃሚ አባልነት ስለከፈለ፣ የ **1/4 (25%)** ኮሚሽን ድርሻዎ የሆነው **{commission:,.2f} ብር** ወደ ቴሌብር ቁጥርዎ መላኩ ተረጋግጧል!"
-                        )
-                    except Exception:
-                        pass
             except Exception as e:
                 logger.error(f"DB Error: {e}")
 
@@ -2403,13 +2458,18 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if support_step == "awaiting_ticket_message":
         ticket_msg = user_text.strip()
         context.user_data.pop("support_ticket_step", None)
-        user_id = update.effective_user.id
+        user_obj = update.effective_user
+        user_id = user_obj.id
+        username_str = f"@{user_obj.username}" if user_obj.username else "No Username"
+        full_name_str = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or f"User {user_id}"
         
         if supabase:
             try:
                 await asyncio.to_thread(
                     lambda: supabase.table("support_tickets").insert({
                         "user_id": str(user_id),
+                        "username": username_str,
+                        "full_name": full_name_str,
                         "message": ticket_msg,
                         "status": "open",
                         "created_at": datetime.now(timezone.utc).isoformat()
@@ -2423,9 +2483,10 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                 await context.bot.send_message(
                     chat_id=int(ADMIN_TELEGRAM_ID),
                     text=f"🎧 **NEW SUPPORT TICKET**\n\n"
-                         f"• User ID: `{user_id}`\n"
-                         f"• Message: {ticket_msg}\n\n"
-                         f"Please check Web Admin Dashboard to reply.",
+                         f"• Sender: **{full_name_str}** ({username_str})\n"
+                         f"• Telegram ID: `{user_id}`\n"
+                         f"• Question: {ticket_msg}\n\n"
+                         f"Reply directly from your Web Admin App.",
                     parse_mode="Markdown"
                 )
             except Exception:
@@ -2441,8 +2502,10 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if partner_setup_step == "awaiting_telebirr":
         telebirr_phone = user_text.strip()
         context.user_data.pop("partner_setup_step", None)
-        user_id = update.effective_user.id
-        user_name = update.effective_user.first_name
+        user_obj = update.effective_user
+        user_id = user_obj.id
+        user_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or "Partner"
+        tg_username = f"@{user_obj.username}" if user_obj.username else "No Username"
 
         if supabase:
             try:
@@ -2450,6 +2513,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                     lambda: supabase.table("partners").upsert({
                         "partner_id": str(user_id),
                         "partner_name": user_name,
+                        "telegram_username": tg_username,
                         "telebirr_number": telebirr_phone,
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     }, on_conflict="partner_id").execute()
