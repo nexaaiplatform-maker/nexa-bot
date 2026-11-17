@@ -57,7 +57,7 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_rand
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
-# 4-Tier Feature & Pricing Matrix (Elite Upgrade Descriptions including AI Voice Concierge)
+# 4-Tier Feature & Pricing Matrix (Always 1-Month display pricing for Telegram users)
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -393,7 +393,10 @@ async def admin_dashboard(pwd: str = ""):
             <td class="p-4 text-slate-300">Tier {s.get('plan_tier', 1)} ({s.get('ui_theme', 'executive').capitalize()})</td>
             <td class="p-4 font-mono text-xs text-slate-400">{owner_id}</td>
             <td class="p-4">{badge}</td>
-            <td class="p-4"><a href="/admin/chats/{s.get('bot_token')}?pwd={pwd}" class="text-blue-400 hover:underline font-semibold text-xs">Inspect Chat 💬</a></td>
+            <td class="p-4 flex items-center gap-2">
+                <a href="/admin/chats/{s.get('bot_token')}?pwd={pwd}" class="text-blue-400 hover:underline font-semibold text-xs">Inspect 💬</a>
+                <button onclick="openSyncModal('{owner_id}', '{s.get('store_name')}', {s.get('plan_tier', 1)})" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-semibold">Sync Tier ⚡</button>
+            </td>
         </tr>
         """
 
@@ -486,7 +489,72 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </section>
         </main>
+
+        <!-- Sync Tier Modal -->
+        <div id="syncModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+            <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-4">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2"><span>⚡</span> Sync Store Tier & Duration</h3>
+                <p id="syncModalSub" class="text-xs text-slate-400">Configure custom tier level and duration for store owner.</p>
+                <form id="syncForm" onsubmit="submitSyncTier(event)" class="space-y-4">
+                    <input type="hidden" id="syncUserId">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Select Tier Level:</label>
+                        <select id="syncTierNum" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-xs">
+                            <option value="1">Tier 1 (Starter - 1,000 ETB/mo)</option>
+                            <option value="2">Tier 2 (Business Pro - 2,500 ETB/mo)</option>
+                            <option value="3">Tier 3 (Enterprise VIP - 5,000 ETB/mo)</option>
+                            <option value="4">Tier 4 (AI Voice Concierge - 7,000 ETB/mo)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Duration (Months):</label>
+                        <input type="number" id="syncMonths" value="1" min="1" max="36" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-xs" required />
+                    </div>
+                    <div class="flex gap-3 pt-2">
+                        <button type="button" onclick="closeSyncModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-semibold transition">Cancel</button>
+                        <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2.5 rounded-xl text-xs font-semibold transition shadow-lg shadow-blue-600/30">Save & Sync Level</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <script>
+            function openSyncModal(userId, storeName, currentTier) {{
+                document.getElementById("syncUserId").value = userId;
+                document.getElementById("syncTierNum").value = currentTier;
+                document.getElementById("syncModalSub").innerText = "Store: " + storeName + " (Owner ID: " + userId + ")";
+                document.getElementById("syncModal").classList.remove("hidden");
+            }}
+
+            function closeSyncModal() {{
+                document.getElementById("syncModal").classList.add("hidden");
+            }}
+
+            async function submitSyncTier(e) {{
+                e.preventDefault();
+                const userId = document.getElementById("syncUserId").value;
+                const tier = parseInt(document.getElementById("syncTierNum").value);
+                const months = parseInt(document.getElementById("syncMonths").value);
+
+                try {{
+                    const resp = await fetch("/admin/sync-tier", {{
+                        method: "POST",
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{pwd}" }})
+                    }});
+                    const data = await resp.json();
+                    if (data.status === "success") {{
+                        alert("Successfully synced tier to Tier " + tier + " for " + months + " month(s)! Notification sent to owner.");
+                        closeSyncModal();
+                        window.location.reload();
+                    }} else {{
+                        alert("Error: " + (data.message || "Failed to sync"));
+                    }}
+                }} catch (err) {{
+                    alert("Network error: " + err);
+                }}
+            }}
+
             async function sendBroadcast() {{
                 const msg = document.getElementById("broadcast-msg").value;
                 if (!msg) {{
@@ -636,7 +704,9 @@ async def admin_broadcast_message(request: Request):
                         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                         json={
                             "chat_id": int(owner_id),
-                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**\n\n{message_text}",
+                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**
+
+{message_text}",
                             "parse_mode": "Markdown"
                         }
                     )
@@ -837,31 +907,52 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif has_access:
         fomo_hook = ""
         if remaining_days <= 2:
-            fomo_hook = f"\n🔥 FOMO ALERT: የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ {remaining_days} ቀን ብቻ ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
+            fomo_hook = f"
+🔥 FOMO ALERT: የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ {remaining_days} ቀን ብቻ ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
         status_text = (
-            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
-            f"• የቀረው ጊዜ: {remaining_days} ቀናት\n"
-            f"• የሚያበቃበት ጊዜ: {trial_exp.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)
+"
+            f"• የቀረው ጊዜ: {remaining_days} ቀናት
+"
+            f"• የሚያበቃበት ጊዜ: {trial_exp.strftime('%Y-%m-%d %H:%M UTC')}
+"
             f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}{fomo_hook}"
         )
     else:
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
 
     welcome_text = (
-        f"🌟 NEXA AI BOT ENGINE 🤖\n"
-        f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
-        f"💡 ለምን ክፍያ መፈጸም ይኖርብዎታል?\n"
-        f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ Elite Pro Tiers ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።\n\n"
-        f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
-        "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "2️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ\n"
-        "3️⃣ /startvoice / /stopvoice - የ AI ድምጽ ስልክ ረዳት አገልግሎትን ያስጀምሩ ወይም ያቁሙ\n"
-        "4️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
-        "5️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "6️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
-        "7️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
-        "8️⃣ /pay - ለወር ወይም የመረጡትን ዕቅድ ክፍያ ይፈጽሙ"
+        f"🌟 NEXA AI BOT ENGINE 🤖
+"
+        f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።
+
+"
+        f"💡 ለምን ክፍያ መፈጸም ይኖርብዎታል?
+"
+        f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ Elite Pro Tiers ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።
+
+"
+        f"📊 የመለያዎ ሁኔታ:
+{status_text}
+
+"
+        "🎯 ፈጣን መመሪያ:
+"
+        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ
+"
+        "2️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ
+"
+        "3️⃣ /startvoice / /stopvoice - የ AI ድምጽ ስልክ ረዳት አገልግሎትን ያስጀምሩ ወይም ያቁሙ
+"
+        "4️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ
+"
+        "5️⃣ /mybots - ቦቶችዎን ያስተዳድሩ
+"
+        "6️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ
+"
+        "7️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ
+"
+        "8️⃣ /pay - አባልነትዎን ያሻሽሉ"
     )
     
     keyboard = [
@@ -899,15 +990,26 @@ async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         referrals = partner.get("total_referrals", 0)
 
         text = (
-            f"🤝 **የ Nexa Partnership (Affiliate Program) ዳሽቦርድ**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 ስም: {p_name}\n"
-            f"📞 የቴሌብር ቁጥርዎ: `{p_phone}`\n"
-            f"👥 ያመጡዋቸው አባላት: {referrals} ሰዎች\n"
-            f"💰 ያገኙት ጠቅላላ ኮሚሽን (1/4): **{earned:,.2f} ብር**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
-            f"`{ref_link}`\n\n"
+            f"🤝 **የ Nexa Partnership (Affiliate Program) ዳሽቦርድ**
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+"
+            f"👤 ስም: {p_name}
+"
+            f"📞 የቴሌብር ቁጥርዎ: `{p_phone}`
+"
+            f"👥 ያመጡዋቸው አባላት: {referrals} ሰዎች
+"
+            f"💰 ያገኙት ጠቅላላ ኮሚሽን (1/4): **{earned:,.2f} ብር**
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**
+"
+            f"`{ref_link}`
+
+"
             f"💡 ማሳሰቢያ፡ ማንኛውም ሰው በዚህ ሊንክ ገብቶ Nexa አባልነት ሲገዛ፣ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ የቴሌብር ቁጥር ይላካል እንዲሁም በሰርቨራችን ይመዘገባል።"
         )
         keyboard = [
@@ -920,8 +1022,12 @@ async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         text = (
-            f"🤝 **ወደ Nexa Partnership (Affiliate) ፕሮግራም እንኳን ደህና መጡ!**\n\n"
-            f"Nexa AIን ለሌሎች ሰዎች በማስተዋወቅ ከሚገቡት ክፍያዎች **1/4 (25%) ኮሚሽን** በቋሚነት ማግኘት ይችላሉ።\n\n"
+            f"🤝 **ወደ Nexa Partnership (Affiliate) ፕሮግራም እንኳን ደህና መጡ!**
+
+"
+            f"Nexa AIን ለሌሎች ሰዎች በማስተዋወቅ ከሚገቡት ክፍያዎች **1/4 (25%) ኮሚሽን** በቋሚነት ማግኘት ይችላሉ።
+
+"
             f"ለመጀመር እባክዎ ክፍያ የሚቀበሉበትን **ትክክለኛ የቴሌብር ስልክ ቁጥርዎን (Telebirr Phone Number)** ከታች ይጻፉ (ለምሳሌ: 09... ወይም 07...):"
         )
         context.user_data["partner_setup_step"] = "awaiting_telebirr"
@@ -945,7 +1051,10 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
-        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ
+━━━━━━━━━━━━━━━━━━━━━━
+
+"
         for idx, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
@@ -954,12 +1063,19 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bus_phone = store.get("business_phone") or "አልተመዘገበም ❌"
             voice_status = "🟢 በሥራ ላይ (Active)" if store.get("voice_ai_active", True) else "🛑 ቆሟል (Paused)"
             bots_list_text += (
-                f"🤖 **{store['store_name']}**\n"
-                f"• ዕቅድ / ፕላን: {tier_name}\n"
-                f"• የንግድ ስልክ ቁጥር: `{bus_phone}`\n"
-                f"• የድምጽ ስልክ ረዳት: {voice_status}\n"
-                f"• ቶከን ቁልፍ: `{masked_token}`\n"
-                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n\n"
+                f"🤖 **{store['store_name']}**
+"
+                f"• ዕቅድ / ፕላን: {tier_name}
+"
+                f"• የንግድ ስልክ ቁጥር: `{bus_phone}`
+"
+                f"• የድምጽ ስልክ ረዳት: {voice_status}
+"
+                f"• ቶከን ቁልፍ: `{masked_token}`
+"
+                f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}
+
+"
             )
         await update.effective_message.reply_text(bots_list_text, parse_mode="Markdown")
     except Exception as e:
@@ -982,27 +1098,45 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Store fetch error: {e}")
 
     tier_select_text = (
-        f"⭐ **የፕሮ አባልነት ዕቅድ ይምረጡ ({store_name})**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• **Tier 1 (Starter)**: 1,000 ብር / ወር\n"
-        f"  _(Core AI Sales, Text Catalog, Photo Support)_ \n\n"
-        f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር\n"
-        f"  _(Advanced AI, Photo Catalogs, Priority Leads)_ \n\n"
-        f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
-        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n\n"
-        f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር\n"
-        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
-        f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
+        f"⭐ **የፕሮ አባልነት ዕቅድ ይምረጡ ({store_name})**
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• **Tier 1 (Starter)**: 1,000 ብር / ወር
+"
+        f"  _(Core AI Sales, Text Catalog, Photo Support)_ 
+
+"
+        f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር
+"
+        f"  _(Advanced AI, Photo Catalogs, Priority Leads)_ 
+
+"
+        f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር
+"
+        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ 
+
+"
+        f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር
+"
+        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ 
+
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**
+"
+        f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!
+
+"
         f"እባክዎ ክፍያ ለመፈጸም ከታች ካሉት ዕቅዶች አንዱን ይምረጡ:"
     )
     
     keyboard = [
-        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር)", callback_data="tier_pay_1")],
-        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር)", callback_data="tier_pay_2")],
-        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር)", callback_data="tier_pay_3")],
-        [InlineKeyboardButton("💎 Tier 4: AI Voice Concierge (7,000 ብር)", callback_data="tier_pay_4")]
+        [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_pay_1")],
+        [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_pay_2")],
+        [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_pay_3")],
+        [InlineKeyboardButton("💎 Tier 4: AI Voice Concierge (7,000 ብር / ወር)", callback_data="tier_pay_4")]
     ]
     
     if update.callback_query:
@@ -1023,7 +1157,9 @@ async def start_tier_upgrade_flow(update: Update, context: ContextTypes.DEFAULT_
         await update.callback_query.answer()
 
     await target_msg.reply_text(
-        "📝 **የክፍያ ማረጋገጫ መረጃ (Verification Details)**\n\n"
+        "📝 **የክፍያ ማረጋገጫ መረጃ (Verification Details)**
+
+"
         "እባክዎ ትክክለኛ ስምዎን (Full Name) ይጻፉ (ይህ በ AI-OCR ደረሰኝ ማረጋገጫ ወቅት ይረዳል):",
         parse_mode="Markdown"
     )
@@ -1051,7 +1187,9 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']}", callback_data=f"select_lead_bot_{store['bot_token']}")])
             
             target_msg = update.callback_query.message if update.callback_query else update.effective_message
-            text_prompt = "📋 **የሊድስ እና ስታቲስቲክስ መቆጣጠሪያ**\n\nእባክዎ መረጃውን ማየት የሚፈልጉትን ቦት/መደብር ይምረጡ:"
+            text_prompt = "📋 **የሊድስ እና ስታቲስቲክስ መቆጣጠሪያ**
+
+እባክዎ መረጃውን ማየት የሚፈልጉትን ቦት/መደብር ይምረጡ:"
             
             if update.callback_query:
                 await target_msg.edit_text(text_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1086,14 +1224,23 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
                 high_intent_count += 1
 
         analytics_header = (
-            f"📊 **የእርስዎ ቦት ጎብኚዎች እና ስታቲስቲክስ — {store_name}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• ጠቅላላ የቦት ጎብኚዎች (Total Visitors): {total_bot_visitors} ተጠቃሚዎች\n"
-            f"• ንቁ የውይይት ተሳታፊዎች: {len(leads_data)} ተጠቃሚዎች\n"
-            f"• 💎 ከፍተኛ ከፋዮች (VIP High-Payers): {vip_payer_count} ተጠቃሚዎች\n"
-            f"• 🔥 ለመግዛት የተዘጋጁ (High-Intent Leads): {high_intent_count} ተጠቃሚዎች\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📋 **በ AI የተተነተነ የደንበኞች እና ስልክ ቁጥሮች ዝርዝር:**\n"
+            f"📊 **የእርስዎ ቦት ጎብኚዎች እና ስታቲስቲክስ — {store_name}**
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+"
+            f"• ጠቅላላ የቦት ጎብኚዎች (Total Visitors): {total_bot_visitors} ተጠቃሚዎች
+"
+            f"• ንቁ የውይይት ተሳታፊዎች: {len(leads_data)} ተጠቃሚዎች
+"
+            f"• 💎 ከፍተኛ ከፋዮች (VIP High-Payers): {vip_payer_count} ተጠቃሚዎች
+"
+            f"• 🔥 ለመግዛት የተዘጋጁ (High-Intent Leads): {high_intent_count} ተጠቃሚዎች
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
+            f"📋 **በ AI የተተነተነ የደንበኞች እና ስልክ ቁጥሮች ዝርዝር:**
+"
         )
 
         lines = [analytics_header]
@@ -1108,18 +1255,25 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
             intent_badge = "💎 ከፍተኛ ከፋይ (VIP High-Payer)" if is_vip else "💬 ንቁ ደንበኛ (Lead)"
 
             lines.append(
-                f"**{idx}. የደንበኛ ስም:** {name}\n"
-                f"   📞 **ስልክ ቁጥር:** `{phone}`\n"
-                f"   🆔 **ቴሌግራም ID (Chat ID):** `{chat_id_val}`\n"
-                f"   📌 **የውይይት ማጠቃለያ:** _{summary}_\n"
-                f"   🏷️ **ሁኔታ:** {intent_badge}\n"
-                f"   ──────────────────────────\n"
+                f"**{idx}. የደንበኛ ስም:** {name}
+"
+                f"   📞 **ስልክ ቁጥር:** `{phone}`
+"
+                f"   🆔 **ቴሌግራም ID (Chat ID):** `{chat_id_val}`
+"
+                f"   📌 **የውይይት ማጠቃለያ:** _{summary}_
+"
+                f"   🏷️ **ሁኔታ:** {intent_badge}
+"
+                f"   ──────────────────────────
+"
             )
 
         if not leads_data:
             lines.append("📭 እስካሁን ቦትዎን የጎበኘ ወይም ስልክ ቁጥር የሰጠ ደንበኛ የለም።")
 
-        full_text = "\n".join(lines)
+        full_text = "
+".join(lines)
         if hasattr(message_target, "edit_text"):
             try:
                 await message_target.edit_text(full_text, parse_mode="Markdown")
@@ -1179,15 +1333,24 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Summary fetch error: {e}")
 
-    bots_breakdown = "\n".join(bot_names_summary) or "እስካሁን የተፈጠረ ቦት የለም።"
+    bots_breakdown = "
+".join(bot_names_summary) or "እስካሁን የተፈጠረ ቦት የለም።"
     summary_text = (
-        f"📊 **የእርስዎ ቦቶች እና የጎብኚዎች ማጠቃለያ**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• የሁሉም ቦቶችዎ ጠቅላላ ጎብኚዎች (Total Visitors): {total_visitors} ተጠቃሚዎች\n"
-        f"• የከፈሉባቸው የደንበኝነት ክፍያዎች: {total_subscribers}\n"
-        f"• ያወጡት ጠቅላላ ወጪ / ክፍያ: {total_revenue:,.2f} ብር\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🤖 **በእርስዎ ቦቶች የተመዘገቡ ጎብኚዎች ዝርዝር:**\n"
+        f"📊 **የእርስዎ ቦቶች እና የጎብኚዎች ማጠቃለያ**
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• የሁሉም ቦቶችዎ ጠቅላላ ጎብኚዎች (Total Visitors): {total_visitors} ተጠቃሚዎች
+"
+        f"• የከፈሉባቸው የደንበኝነት ክፍያዎች: {total_subscribers}
+"
+        f"• ያወጡት ጠቅላላ ወጪ / ክፍያ: {total_revenue:,.2f} ብር
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
+        f"🤖 **በእርስዎ ቦቶች የተመዘገቡ ጎብኚዎች ዝርዝር:**
+"
         f"{bots_breakdown}"
     )
     await update.effective_message.reply_text(summary_text, parse_mode="Markdown")
@@ -1233,12 +1396,19 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Weekly summary error: {e}")
 
     weekly_text = (
-        f"📈 **የእርስዎ ቦቶች ሳምንታዊ ሪፖርት (Weekly Summary)**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• ባለፉት 7 ቀናት ቦቶችዎን የጎበኙ ሰዎች: {tenant_visitors_count} ተጠቃሚዎች\n"
-        f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}\n"
-        f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📈 **የእርስዎ ቦቶች ሳምንታዊ ሪፖርት (Weekly Summary)**
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+"
+        f"• ባለፉት 7 ቀናት ቦቶችዎን የጎበኙ ሰዎች: {tenant_visitors_count} ተጠቃሚዎች
+"
+        f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}
+"
+        f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር
+"
+        f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
         f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
     )
     await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
@@ -1253,7 +1423,9 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_content = update.effective_message.text.replace("/update", "").strip()
     if not text_content:
         await update.effective_message.reply_text(
-            "⚠️ እባክዎ ማሻሻል የሚፈልጉትን አዲስ የዕቃ ዝርዝር ወይም ካታሎግ ከ `/update` ትዕዛዝ ጋር አብረው ይጻፉ።\n\n"
+            "⚠️ እባክዎ ማሻሻል የሚፈልጉትን አዲስ የዕቃ ዝርዝር ወይም ካታሎግ ከ `/update` ትዕዛዝ ጋር አብረው ይጻፉ።
+
+"
             "ምሳሌ: `/update 1. የቤት እቃዎች - 5000 ብር`"
         )
         return
@@ -1332,11 +1504,16 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 healed_stores += 1
 
         return (
-            f"🛡️ **የAI ሲስተም ፍተሻ እና ራስ-ሰር እርማት ተጠናቋል!**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• የተስተካከሉ ዌብሁኮች: {repaired_webhooks}\n"
-            f"• የተስተካከሉ ቦቶች: {healed_stores}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛡️ **የAI ሲስተም ፍተሻ እና ራስ-ሰር እርማት ተጠናቋል!**
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+"
+            f"• የተስተካከሉ ዌብሁኮች: {repaired_webhooks}
+"
+            f"• የተስተካከሉ ቦቶች: {healed_stores}
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+"
             f"✅ Nexa እና ሁሉም የተገናኙ ቦቶች በትክክል እየሰሩ መሆናቸው ተረጋግጧል።"
         )
     except Exception as e:
@@ -1360,7 +1537,9 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
 
     await target_msg.reply_text(
-        "🤖 **አዲስ የ AI ቦት ምዝገባ (Step 1 from 6)**\n\n"
+        "🤖 **አዲስ የ AI ቦት ምዝገባ (Step 1 from 6)**
+
+"
         "እባክዎ ለንግድዎ ወይም ለመደብርዎ የሚሆን ስም (Store/Business Name) ይጻፉ:",
         parse_mode="Markdown"
     )
@@ -1437,10 +1616,14 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await target_message(
-        "እርምጃ 4 ከ 6: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
-        "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
-        "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
-        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ\n"
+        "እርምጃ 4 ከ 6: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:
+"
+        "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ
+"
+        "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል
+"
+        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ
+"
         "• **Tier 4:** ሁሉም የ VIP አገልግሎቶች + በቀጥታ የሚሰራ የ AI ድምጽ ስልክ ረዳት (AI Voice Call Receptionist)",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -1463,8 +1646,10 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
 
     await target_message(
-        f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር)\n\n"
-        "እርምጃ 5 ከ 6: ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
+        f"የተመረጠው ዕቅድ: {tier_info['name']} ({tier_info['price']:,} ብር / ወር)
+
+"
+        "እርምጃ 5 ከ 6: እባክዎ ሙሉ ዕቃዎችዎን፣ አገልግሎቶችዎን፣ የሪል እስቴት መረጃዎን ወይም ካታሎግ ጽሑፍ ከታች ይለጥፉ:"
     )
     return INVENTORY
 
@@ -1479,7 +1664,9 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             prompt = (
                 f"You are an expert database and catalog structurer. Clean up, re-organize, and simplify the following raw store inventory or catalog text "
-                f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:\n\n{raw_input}"
+                f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:
+
+{raw_input}"
             )
             completion = await async_groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
@@ -1492,7 +1679,9 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["inventory_data"] = structured_inventory
     await update.effective_message.reply_text(
-        "✅ Catalog successfully sorted and structured by AI!\n\n"
+        "✅ Catalog successfully sorted and structured by AI!
+
+"
         "እርምጃ 6 ከ 6: እባክዎ ከ @BotFather የወሰዱትን ልዩ የቦት ቶከን (Bot Token) እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -1509,7 +1698,9 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bot_token"] = bot_token
 
     await update.effective_message.reply_text(
-        "📱 **የስልክ ቁጥር ምዝገባ (Ethiopian Phone Number)**\n\n"
+        "📱 **የስልክ ቁጥር ምዝገባ (Ethiopian Phone Number)**
+
+"
         "እባክዎ የንግድዎን ወይም የባለቤቱን ስልክ ቁጥር ያስገቡ (`09...` ወይም `07...`):",
         parse_mode="Markdown"
     )
@@ -1582,11 +1773,18 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     cool_advert_text = (
-        f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**\n\n"
-        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
-        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!\n"
-        f"• የተመረጠው ደረጃ: {tier_info['name']}\n"
-        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ Groq AI እና Cloud Webhook ጋር ተገናኝቷል!\n\n"
+        f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**
+
+"
+        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።
+"
+        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!
+"
+        f"• የተመረጠው ደረጃ: {tier_info['name']}
+"
+        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ Groq AI እና Cloud Webhook ጋር ተገናኝቷል!
+
+"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን አሻሽለው Elite Features ማግኘት ይችላሉ!"
     )
     
@@ -1629,7 +1827,9 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']} ({store.get('business_phone', 'No Phone')})", callback_data=f"change_phone_bot_{store['bot_token']}")])
             
             await update.effective_message.reply_text(
-                "📱 **ስልክ ቁጥር መቀየሪያ (Change Phone)**\n\nእባክዎ ስልክ ቁጥሩን ማሻሻል የሚፈልጉትን መደብር/ቦት ይምረጡ:",
+                "📱 **ስልክ ቁጥር መቀየሪያ (Change Phone)**
+
+እባክዎ ስልክ ቁጥሩን ማሻሻል የሚፈልጉትን መደብር/ቦት ይምረጡ:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
@@ -1687,7 +1887,9 @@ async def stop_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             lambda: supabase.table("stores").update({"voice_ai_active": False}).eq("owner_telegram_id", owner_id).execute()
         )
         await update.effective_message.reply_text(
-            "🛑 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በጊዜያዊነት ቆሟል።**\n\n"
+            "🛑 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በጊዜያዊነት ቆሟል።**
+
+"
             "ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ አያነጋግራቸውም። እንደገና ለማስጀመር `/startvoice` የሚለውን ይጠቀሙ።",
             parse_mode="Markdown"
         )
@@ -1706,7 +1908,9 @@ async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             lambda: supabase.table("stores").update({"voice_ai_active": True}).eq("owner_telegram_id", owner_id).execute()
         )
         await update.effective_message.reply_text(
-            "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
+            "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**
+
+"
             "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
             parse_mode="Markdown"
         )
@@ -1725,7 +1929,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     caption = update.message.caption or ""
-    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\\-]+)", caption)
+    match = re.search(r"/addmedia\s+([a-zA-Z0-9_\-]+)", caption)
     
     if not match:
         return
@@ -1752,7 +1956,7 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 file_id = update.message.video.file_id
                 media_type = "video"
 
-            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\\-]+", "", caption).strip()
+            clean_caption = re.sub(r"/addmedia\s+[a-zA-Z0-9_\-]+", "", caption).strip()
 
             await asyncio.to_thread(
                 lambda: supabase.table("property_media").insert({
@@ -1803,8 +2007,11 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     system_prompt = (
         f"You are the professional AI Voice Receptionist for company {store_name}. "
         "Your responses will be spoken aloud to callers via Text-to-Speech in Amharic or English. "
-        "Keep answers polite, concise, natural, and directly helpful based on the store catalog below.\n\n"
-        f"Catalog:\n{inventory}"
+        "Keep answers polite, concise, natural, and directly helpful based on the store catalog below.
+
+"
+        f"Catalog:
+{inventory}"
     )
     
     ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
@@ -1852,13 +2059,13 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
 # -------------------------------------------------------------------
 class TierSyncModel(BaseModel):
     user_id: str | int
-    tier: str
-    months: int
-    expires_at: str
+    plan_tier: int
+    months: int = 1
+    pwd: str
 
 class BroadcastModel(BaseModel):
     message: str
-    target: str
+    target: str = "all"
     pwd: str
 
 class DirectChatModel(BaseModel):
@@ -1868,16 +2075,80 @@ class DirectChatModel(BaseModel):
 
 @app.post("/admin/sync-tier")
 async def sync_tier(data: TierSyncModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    
+    user_id_str = str(data.user_id)
+    tier = int(data.plan_tier)
+    months = int(data.months or 1)
+    
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=30 * months)
+    credits = TIER_CONFIG.get(tier, TIER_CONFIG[1])["credits"]
+
+    if supabase:
+        try:
+            # Update stores plan tier
+            await asyncio.to_thread(
+                lambda: supabase.table("stores").update({"plan_tier": tier}).eq("owner_telegram_id", user_id_str).execute()
+            )
+            # Update subscriptions
+            await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").upsert({
+                    "user_id": user_id_str,
+                    "is_pro": True,
+                    "trial_expires": expires_at.isoformat(),
+                    "credits_remaining": credits
+                }).execute()
+            )
+        except Exception as e:
+            logger.error(f"Sync tier DB error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # Send instant change notification alert to store owner via Telegram
     try:
-        return {"status": "success", "message": "Tier synced successfully"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        tier_name = TIER_CONFIG.get(tier, TIER_CONFIG[1])["name"]
+        alert_text = (
+            f"⚡ **የአካውንትዎ Tier እና የቆይታ ጊዜ በአስተዳዳሪው ተሻሽሏል!**
+
+"
+            f"• አዲስ ዕቅድ: **{tier_name}**
+"
+            f"• የቆይታ ጊዜ: **{months} ወር(ዎች)**
+"
+            f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`
+
+"
+            f"🚀 አሁን ሁሉም የ Elite ሱቅ እና የ AI ድምጽ ረዳት አገልግሎቶች ሙሉ በሙሉ በሥራ ላይ ውለዋል!"
+        )
+        await http_client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": int(user_id_str),
+                "text": alert_text,
+                "parse_mode": "Markdown"
+            }
+        )
+    except Exception as tg_err:
+        logger.error(f"Tier sync Telegram notification error: {tg_err}")
+
+    return {"status": "success", "message": f"Successfully synced user {user_id_str} to Tier {tier} for {months} month(s)."}
 
 @app.post("/admin/send-message")
 async def send_direct_message(data: DirectChatModel):
     if data.pwd != ADMIN_PANEL_PASSWORD:
         return {"status": "error", "message": "Unauthorized password"}
     try:
+        await http_client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": int(data.chat_id),
+                "text": f"📩 **ADMIN MESSAGE**
+
+{data.message}",
+                "parse_mode": "Markdown"
+            }
+        )
         return {"status": "success", "message": "Message sent via bot"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -1887,7 +2158,33 @@ async def broadcast_announcement(data: BroadcastModel):
     if data.pwd != ADMIN_PANEL_PASSWORD:
         return {"status": "error", "message": "Unauthorized password"}
     try:
-        return {"status": "success", "message": "Broadcast dispatched"}
+        sent_count = 0
+        if supabase:
+            stores_res = await asyncio.to_thread(lambda: supabase.table("stores").select("owner_telegram_id, plan_tier").execute())
+            stores_list = stores_res.data or []
+            owner_ids = set()
+            for s in stores_list:
+                owner_id = s.get("owner_telegram_id")
+                if owner_id:
+                    owner_ids.add(owner_id)
+
+            for owner_id in owner_ids:
+                try:
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": int(owner_id),
+                            "text": f"📢 **NEXA PLATFORM ANNOUNCEMENT**
+
+{data.message}",
+                            "parse_mode": "Markdown"
+                        }
+                    )
+                    sent_count += 1
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    logger.error(f"Broadcast error for {owner_id}: {e}")
+        return {"status": "success", "sent": sent_count}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -1981,11 +2278,16 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if async_groq_client:
         try:
             prompt = (
-                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
-                f"1. Transaction Reference ID or Confirmation Code (string)\n"
-                f"2. Total Amount in ETB transferred (number or string without commas)\n"
-                f"3. Sender or Payer Name if visible (string or null)\n"
-                f"4. Sender Phone Number if visible (string or null)\n"
+                f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:
+"
+                f"1. Transaction Reference ID or Confirmation Code (string)
+"
+                f"2. Total Amount in ETB transferred (number or string without commas)
+"
+                f"3. Sender or Payer Name if visible (string or null)
+"
+                f"4. Sender Phone Number if visible (string or null)
+"
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}}'
             )
@@ -2014,7 +2316,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             if dup_check.data:
                 await update.effective_message.reply_text(
-                    "⚠️ **ይህ የክፍያ ደረሰኝ (Screenshot / Reference ID) ከዚህ በፊት ጥቅም ላይ ውሏል!**\n\n"
+                    "⚠️ **ይህ የክፍያ ደረሰኝ (Screenshot / Reference ID) ከዚህ በፊት ጥቅም ላይ ውሏል!**
+
+"
                     "እባክዎ አዲስ እና ትክክለኛ የክፍያ ደረሰኝ Screenshot በድጋሚ ይላኩ።"
                 )
                 return
@@ -2065,7 +2369,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     try:
                         await context.bot.send_message(
                             chat_id=int(partner_id),
-                            text=f"🎉 **ኮሚሽን ደርሶዎታል! (Partner Affiliate Commission)**\n\n"
+                            text=f"🎉 **ኮሚሽን ደርሶዎታል! (Partner Affiliate Commission)**
+
+"
                                  f"እርስዎ ያመጡት ተጠቃሚ አባልነት ስለከፈለ፣ የ **1/4 (25%)** ኮሚሽን ድርሻዎ የሆነው **{commission:,.2f} ብር** ወደ ቴሌብር ቁጥርዎ መላኩ ተረጋግጧል!"
                         )
                     except Exception:
@@ -2074,10 +2380,15 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.error(f"DB Error: {e}")
 
         appreciation_msg = (
-            f"🎉 **ክፍያዎ በድምቀት ተረጋግጧል! እናመሰግናለን!** ⭐🇪🇹\n\n"
+            f"🎉 **ክፍያዎ በድምቀት ተረጋግጧል! እናመሰግናለን!** ⭐🇪🇹
+
+"
             f"✨ ሠላም **{expected_payer_name}**! ንግድዎ ወደሚቀጥለው የላቀ የስኬት ከፍታ እንዲሸጋገር Nexa AI ከጎንዎ አብሮለታል። "
-            f"አሁን ሁሉም ፕሪሚየም እና Elite Features (ያልተወሰነ AI፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ) ሙሉ በሙሉ ተከፍተዋል!\n\n"
-            f"• የግብይት ማረጋገጫ ቁጥር: `{ref_id}`\n"
+            f"አሁን ሁሉም ፕሪሚየም እና Elite Features (ያልተወሰነ AI፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ) ሙሉ በሙሉ ተከፍተዋል!
+
+"
+            f"• የግብይት ማረጋገጫ ቁጥር: `{ref_id}`
+"
             f"🚀 ቦቶችዎ ያለ ምንም ገደብ በከፍተኛ ፍጥነት በመሥራት ላይ ይገኛሉ!"
         )
         await update.effective_message.reply_text(appreciation_msg, parse_mode="Markdown")
@@ -2110,7 +2421,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 pass
         frustration_fix_text = (
-            "⚠️ **የክፍያ ማረጋገጫው በራስ-ሰር ሊመሳሰል አልቻለም።**\n\n"
+            "⚠️ **የክፍያ ማረጋገጫው በራስ-ሰር ሊመሳሰል አልቻለም።**
+
+"
             "💡 ደረሰኝዎ ወደ Nexa Elite Web Admin Dashboard ተልኳል። አስተዳዳሪው በአጭር ጊዜ ውስጥ አረጋግጦ አካውንትዎን ያጸድቅልዎታል!"
         )
         await update.effective_message.reply_text(frustration_fix_text, parse_mode="Markdown")
@@ -2145,10 +2458,16 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
 
         success_msg = (
-            f"✅ **እንኳን ደስ አለዎት! አሁን ኦፊሴላዊ የ Nexa Partner (Affiliate) ነዎት!**\n\n"
-            f"📞 የተመዘገበ የቴሌብር ቁጥር: `{telebirr_phone}`\n"
-            f"💰 ኮሚሽን: ማንኛውም ሰው በእርስዎ ሊንክ ገብቶ ሲመዝገብ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ ይገባል።\n\n"
-            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
+            f"✅ **እንኳን ደስ አለዎት! አሁን ኦፊሴላዊ የ Nexa Partner (Affiliate) ነዎት!**
+
+"
+            f"📞 የተመዘገበ የቴሌብር ቁጥር: `{telebirr_phone}`
+"
+            f"💰 ኮሚሽን: ማንኛውም ሰው በእርስዎ ሊንክ ገብቶ ሲመዝገብ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ ይገባል።
+
+"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**
+"
             f"`{ref_link}`"
         )
         await update.effective_message.reply_text(success_msg, parse_mode="Markdown")
@@ -2225,16 +2544,27 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
         partner_note = "⭐ (በአጋር/Affiliate ማስታወቂያ በኩል የተደረገ ክፍያ)" if partner_id else ""
         invoice_text = (
-            f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})** {partner_note}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 ከፋይ: {payer_name} | 📞 `{phone}`\n"
-            f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**\n"
-            f"• የክፍያ መቀበያ ቁጥር: `{masked_account}`\n"
-            f"• የደረሰኝ ቁጥር: {order_id}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📌 **ምን ማድረግ ይኖርብዎታል?**\n"
-            f"1. በስልክዎ የቴሌብር መተግበሪያ በመጠቀም ከላይ ወደተጠቀሰው ቁጥር `{masked_account}` ትክክለኛውን `{exact_amount_etb:,} ብር` ያስተላልፉ።\n"
-            f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) እዚህ ይላኩ።\n"
+            f"💳 **የቴሌብር ክፍያ ዝርዝር — {tier_info['name']} ({store_name})** {partner_note}
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+"
+            f"👤 ከፋይ: {payer_name} | 📞 `{phone}`
+"
+            f"• የሚከፈለው ትክክለኛ መጠን: **{exact_amount_etb:,} ብር**
+"
+            f"• የክፍያ መቀበያ ቁጥር: `{masked_account}`
+"
+            f"• የደረሰኝ ቁጥር: {order_id}
+"
+            f"━━━━━━━━━━━━━━━━━━━━━━
+
+"
+            f"📌 **ምን ማድረግ ይኖርብዎታል?**
+"
+            f"1. በስልክዎ የቴሌብር መተግበሪያ በመጠቀም ከላይ ወደተጠቀሰው ቁጥር `{masked_account}` ትክክለኛውን `{exact_amount_etb:,} ብር` ያስተላልፉ።
+"
+            f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) እዚህ ይላኩ።
+"
             f"3. የ AI-OCR ሲስተሙ ስምዎን፣ ስልክ ቁጥርዎን እና የትራንዛክሽን መጠንዎን አረጋግጦ አካውንትዎን ወዲያውኑ ይከፍትልዎታል።"
         )
         
@@ -2403,7 +2733,9 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         }
 
         direct_welcome = (
-            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!
+
+"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
@@ -2457,8 +2789,10 @@ async def analyze_and_upsert_lead(
     if not supabase or not async_groq_client:
         return
 
-    convo_text = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
-    convo_text += f"\nuser: {user_text}"
+    convo_text = "
+".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
+    convo_text += f"
+user: {user_text}"
 
     analysis_prompt = f"""
     Analyze this customer conversation one-by-one for a business store and extract structured lead intelligence.
@@ -2611,8 +2945,8 @@ async def store_chat_webhook(payload: dict):
             logger.error(f"Groq Chat Error: {e}")
             ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
-    tag_match = re.search(r"\\\[SEND_MEDIA:([a-zA-Z0-9_\\-]+)\\\]", ai_reply)
-    clean_ai_reply = re.sub(r"\\\[SEND_MEDIA:[a-zA-Z0-9_\\-]+\\\]", "", ai_reply).strip()
+    tag_match = re.search(r"\\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\\]", ai_reply)
+    clean_ai_reply = re.sub(r"\\[SEND_MEDIA:[a-zA-Z0-9_\-]+\\]", "", ai_reply).strip()
 
     if supabase:
         async def _save_chat_history():
