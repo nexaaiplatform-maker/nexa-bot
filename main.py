@@ -112,12 +112,12 @@ telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).
 # Global HTTP Client Pool for High Throughput
 http_client: httpx.AsyncClient = None
 
-# Onboarding Conversation States: STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN
+# Onboarding Conversation States
 STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
-PARTNER_TELEBIRR = 100  # Conversation state for setting partner telebirr account
-STORE_PHONE = 101       # Conversation state for capturing store business / owner phone
-CHANGE_PHONE = 102      # Conversation state for updating existing store phone
-SUPPORT_TICKET = 103    # Conversation state for submitting customer support tickets
+PARTNER_TELEBIRR = 100  
+STORE_PHONE = 101       
+CHANGE_PHONE = 102      
+SUPPORT_TICKET = 103    
 
 
 # -------------------------------------------------------------------
