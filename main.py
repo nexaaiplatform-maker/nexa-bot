@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Form
+from fastapi import FastAPI, Request, HTTPException, Form, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -24,27 +24,10 @@ from telegram.ext import (
     filters,
 )
 
+# -------------------------------------------------------------------
+# Secure Configuration & Environment Variables
+# -------------------------------------------------------------------
 ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##")
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("NexaAI")
-
-# Initialize FastAPI app first so all route decorators can use it
-app = FastAPI(title="Nexa AI Elite Commerce Backend")
-
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# -------------------------------------------------------------------
-# Configuration & Environment Variables
-# -------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9012733890:AAHzbRZiqhYKXu9b0s8I7wwMls3QbWA4Q-Q")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyewcrbtfaswqwqxqimu.supabase.co")
@@ -59,7 +42,29 @@ NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-63
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
 
-# 4-Tier Feature & Pricing Matrix (Always 1-Month display pricing for Telegram users)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NexaAI")
+
+# Initialize FastAPI app
+app = FastAPI(title="Nexa AI Elite Commerce Backend")
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://admin-nexa-telegram-bot-dashboard.netlify.app",
+        "https://nexa-bot-f5al.onrender.com",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 4-Tier Feature & Pricing Matrix
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -99,7 +104,7 @@ TIER_CONFIG = {
     },
 }
 
-# Initialize Clients with Fail-Safe Checks & Logging
+# Initialize Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 if not supabase:
     logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
@@ -109,9 +114,7 @@ if not async_groq_client:
     logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
 
 # Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(10).write_timeout(10).build()
-
-# Global HTTP Client Pool for High Throughput
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(15).write_timeout(15).build()
 http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
@@ -123,8 +126,13 @@ SUPPORT_TICKET = 103
 
 
 # -------------------------------------------------------------------
-# Helper: Parse ISO Timestamps Safely
+# Security & Authentication Helpers
 # -------------------------------------------------------------------
+def verify_admin_pwd(pwd: str, header_pwd: str = None) -> bool:
+    provided = pwd or header_pwd or ""
+    return provided == ADMIN_PANEL_PASSWORD
+
+
 def parse_dt(dt_str):
     if not dt_str:
         return datetime.now(timezone.utc) + timedelta(days=3)
@@ -152,7 +160,8 @@ async def get_or_create_user_subscription(user_id: int):
                 return {
                     "trial_expires": parse_dt(sub["trial_expires"]),
                     "credits_remaining": sub["credits_remaining"],
-                    "is_pro": sub["is_pro"]
+                    "is_pro": sub["is_pro"],
+                    "plan_tier": sub.get("plan_tier", 1)
                 }
         except Exception as e:
             logger.error(f"Subscription fetch error: {e}")
@@ -161,7 +170,8 @@ async def get_or_create_user_subscription(user_id: int):
     default_sub = {
         "trial_expires": default_expiry,
         "credits_remaining": 50,
-        "is_pro": False
+        "is_pro": False,
+        "plan_tier": 1
     }
     
     if supabase:
@@ -171,7 +181,8 @@ async def get_or_create_user_subscription(user_id: int):
                     "user_id": str(user_id),
                     "trial_expires": default_expiry.isoformat(),
                     "credits_remaining": 50,
-                    "is_pro": False
+                    "is_pro": False,
+                    "plan_tier": 1
                 }).execute()
             )
         except Exception as e:
@@ -183,10 +194,13 @@ async def get_or_create_user_subscription(user_id: int):
 async def verify_active_access(user_id: int) -> bool:
     try:
         sub = await get_or_create_user_subscription(user_id)
-        if sub["is_pro"]:
-            return True
         now = datetime.now(timezone.utc)
         trial_exp = parse_dt(sub["trial_expires"])
+        if sub["is_pro"]:
+            # If trial_expires is set far in future by sync-tier, check expiration
+            if sub.get("trial_expires") and now > trial_exp:
+                return False
+            return True
         if now < trial_exp and sub["credits_remaining"] > 0:
             return True
     except Exception as e:
@@ -224,7 +238,6 @@ async def log_visitor(user_id: int):
 # Telegram Voice Transcription via Groq Whisper AI
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    """Downloads voice note from Telegram and transcribes it using Groq Whisper API."""
     if not async_groq_client or not http_client:
         return ""
     try:
@@ -258,30 +271,37 @@ async def root_health():
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
         "groq_connected": bool(async_groq_client),
-        "telegram_connected": bool(TELEGRAM_BOT_TOKEN)
+        "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
+        "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET)
     }
 
 
+# -------------------------------------------------------------------
+# Live JSON Sync API for Netlify Admin Dashboard
+# -------------------------------------------------------------------
 @app.get("/admin/live-data")
-async def admin_live_data(pwd: str = ""):
-    """Live JSON sync endpoint for the Netlify Admin Dashboard & HTML Command Center."""
-    if pwd != ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=403, detail="Unauthorized")
+async def admin_live_data(pwd: str = "", x_admin_password: str = Header(None)):
+    """Live JSON sync endpoint for Netlify Admin Dashboard & HTML Command Center."""
+    if not verify_admin_pwd(pwd, x_admin_password):
+        raise HTTPException(status_code=403, detail="Unauthorized Admin Password")
     if not supabase:
         return {"status": "error", "message": "Supabase not connected"}
 
     try:
-        r1, r2, r3, r4, r5, r6, r7 = await asyncio.gather(
-            asyncio.to_thread(lambda: supabase.table("manual_review_queue").select("*").order("created_at", desc=True).limit(50).execute()),
-            asyncio.to_thread(lambda: supabase.table("stores").select("*").execute()),
+        r1, r2, r3, r4, r5, r6, r7, r8, r9 = await asyncio.gather(
+            asyncio.to_thread(lambda: supabase.table("manual_review_queue").select("*").order("created_at", desc=True).limit(60).execute()),
+            asyncio.to_thread(lambda: supabase.table("stores").select("*").order("created_at", desc=True).execute()),
             asyncio.to_thread(lambda: supabase.table("subscriptions").select("*").execute()),
             asyncio.to_thread(lambda: supabase.table("leads").select("*").order("updated_at", desc=True).limit(100).execute()),
             asyncio.to_thread(lambda: supabase.table("partners").select("*").execute()),
-            asyncio.to_thread(lambda: supabase.table("support_tickets").select("*").order("created_at", desc=True).limit(50).execute()),
-            asyncio.to_thread(lambda: supabase.table("paid_subscriptions").select("*").order("created_at", desc=True).limit(100).execute())
+            asyncio.to_thread(lambda: supabase.table("support_tickets").select("*").order("created_at", desc=True).limit(60).execute()),
+            asyncio.to_thread(lambda: supabase.table("paid_subscriptions").select("*").order("created_at", desc=True).limit(100).execute()),
+            asyncio.to_thread(lambda: supabase.table("referrals").select("*").order("created_at", desc=True).limit(100).execute()),
+            asyncio.to_thread(lambda: supabase.table("affiliate_payouts").select("*").order("created_at", desc=True).limit(50).execute())
         )
         return {
             "status": "success",
+            "server_time": datetime.now(timezone.utc).isoformat(),
             "manual_reviews": r1.data or [],
             "stores": r2.data or [],
             "subscriptions": r3.data or [],
@@ -289,6 +309,8 @@ async def admin_live_data(pwd: str = ""):
             "partners": r5.data or [],
             "support_tickets": r6.data or [],
             "paid_subscriptions": r7.data or [],
+            "referrals": r8.data or [],
+            "affiliate_payouts": r9.data or [],
             "tier_config": TIER_CONFIG
         }
     except Exception as e:
@@ -301,7 +323,7 @@ async def admin_live_data(pwd: str = ""):
 # -------------------------------------------------------------------
 @app.get("/admin/chats/{bot_token}", response_class=HTMLResponse)
 async def admin_view_chats(bot_token: str, pwd: str = ""):
-    if pwd != ADMIN_PANEL_PASSWORD:
+    if not verify_admin_pwd(pwd):
         raise HTTPException(status_code=403, detail="Unauthorized")
     
     chats_res = []
@@ -368,7 +390,7 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(pwd: str = ""):
-    if pwd != ADMIN_PANEL_PASSWORD:
+    if not verify_admin_pwd(pwd):
         return f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -473,7 +495,7 @@ async def admin_dashboard(pwd: str = ""):
                         }});
                         statusEl.classList.add("hidden");
                         if (credential) {{
-                            window.location.href = "/admin?pwd=" + encodeURIComponent("adminnexa_dawitandargachew_0035484@##");
+                            window.location.href = "/admin?pwd=" + encodeURIComponent("{ADMIN_PANEL_PASSWORD}");
                         }}
                     }} catch (e) {{
                         statusEl.classList.add("hidden");
@@ -622,6 +644,7 @@ async def admin_dashboard(pwd: str = ""):
                 <h1 class="text-xl font-black tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">NEXA ELITE ADMIN</h1>
             </div>
             <div class="flex items-center gap-4">
+                <a href="{NETLIFY_DASHBOARD_URL}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
                 <button onclick="registerBiometrics()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition border border-slate-700">🧬 Enable Biometrics</button>
                 <a href="/admin" class="bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 px-4 py-2 rounded-xl text-xs font-semibold transition">Lock Session</a>
             </div>
@@ -879,7 +902,7 @@ async def admin_dashboard(pwd: str = ""):
 
 @app.get("/admin/receipt/{file_id}")
 async def view_telegram_receipt(file_id: str, pwd: str = ""):
-    if pwd != ADMIN_PANEL_PASSWORD:
+    if not verify_admin_pwd(pwd):
         raise HTTPException(status_code=403, detail="Unauthorized")
     file_resp = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}")
     file_path = file_resp.json().get("result", {}).get("file_path")
@@ -893,13 +916,13 @@ class ReviewActionJSONModel(BaseModel):
     user_id: str | int
     plan_tier: int = 1
     decision: str
-    pwd: str
+    pwd: str = ""
 
 
 @app.post("/admin/review-action-json")
-async def admin_payment_action_json(data: ReviewActionJSONModel):
+async def admin_payment_action_json(data: ReviewActionJSONModel, x_admin_password: str = Header(None)):
     """JSON API endpoint for approving/rejecting payment reviews directly from Netlify HTML Admin Dashboard."""
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     if not supabase:
         return {"status": "error", "message": "Supabase not connected"}
@@ -912,9 +935,14 @@ async def admin_payment_action_json(data: ReviewActionJSONModel):
         if data.decision == "approve":
             credits = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["credits"]
             tier_price = float(TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["price"])
+            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
             await asyncio.gather(
                 asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
-                    "user_id": user_id, "is_pro": True, "plan_tier": plan_tier, "credits_remaining": credits
+                    "user_id": user_id,
+                    "is_pro": True,
+                    "plan_tier": plan_tier,
+                    "credits_remaining": credits,
+                    "trial_expires": expires_at.isoformat()
                 }).execute()),
                 asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
@@ -951,21 +979,25 @@ async def admin_payment_action(
     plan_tier: int = Form(1),
     decision: str = Form(...)
 ):
-    if pwd != ADMIN_PANEL_PASSWORD:
+    if not verify_admin_pwd(pwd):
         raise HTTPException(status_code=403, detail="Unauthorized")
 
     if supabase:
         if decision == "approve":
             credits = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["credits"]
             tier_price = float(TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["price"])
+            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
             await asyncio.gather(
                 asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
-                    "user_id": user_id, "is_pro": True, "plan_tier": plan_tier, "credits_remaining": credits
+                    "user_id": user_id,
+                    "is_pro": True,
+                    "plan_tier": plan_tier,
+                    "credits_remaining": credits,
+                    "trial_expires": expires_at.isoformat()
                 }).execute()),
                 asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
                 asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
             )
-            # Record financial split & affiliate 25% share if user was referred
             await record_affiliate_commission_and_revenue(
                 user_id=str(user_id),
                 amount_etb=tier_price,
@@ -1000,16 +1032,10 @@ async def record_affiliate_commission_and_revenue(
     reference_id: str,
     bot_instance=None
 ):
-    """
-    Records total revenue collected, checks if user came via an affiliate link,
-    calculates 25% (1/4) for the affiliate and 75% (3/4) net for the platform owner,
-    and updates referrals + partners ledgers in Supabase.
-    """
     if not supabase:
         return
 
     try:
-        # 1. Log into paid_subscriptions for total platform income tracking
         await asyncio.to_thread(lambda: supabase.table("paid_subscriptions").insert({
             "user_id": str(user_id),
             "order_id": order_id,
@@ -1018,21 +1044,19 @@ async def record_affiliate_commission_and_revenue(
             "reference_id": reference_id
         }).execute())
 
-        # 2. Check if this user was referred by an affiliate
         ref_res = await asyncio.to_thread(
             lambda: supabase.table("referrals").select("*").eq("referred_user_id", str(user_id)).execute()
         )
         if ref_res.data:
             ref_row = ref_res.data[0]
             partner_id = str(ref_row["partner_id"])
-            commission = round(float(amount_etb) * 0.25, 2)   # 1/4 Affiliate Share
-            owner_net = round(float(amount_etb) - commission, 2) # 3/4 Your Net Profit
+            commission = round(float(amount_etb) * 0.25, 2)
+            owner_net = round(float(amount_etb) - commission, 2)
 
             prev_paid = float(ref_row.get("amount_paid") or 0)
             prev_comm = float(ref_row.get("commission_amount") or 0)
             prev_net = float(ref_row.get("owner_net_amount") or 0)
 
-            # Update referral record with tier, total paid, 25% commission & 75% owner net
             await asyncio.to_thread(
                 lambda: supabase.table("referrals").update({
                     "plan_tier": plan_tier,
@@ -1044,7 +1068,6 @@ async def record_affiliate_commission_and_revenue(
                 }).eq("referred_user_id", str(user_id)).execute()
             )
 
-            # Update affiliate's cumulative earnings & referral count
             p_info = await asyncio.to_thread(
                 lambda: supabase.table("partners").select("total_earned, total_referrals").eq("partner_id", partner_id).execute()
             )
@@ -1059,7 +1082,6 @@ async def record_affiliate_commission_and_revenue(
                     }).eq("partner_id", partner_id).execute()
                 )
 
-            # Notify affiliate via Telegram
             notify_text = (
                 f"🎉 **አዲስ የኮሚሽን ገቢ ተመዝግቧል! (Affiliate Commission)**\n\n"
                 f"• የተመዘገበው ደረጃ: **Tier {plan_tier}**\n"
@@ -1079,7 +1101,7 @@ async def record_affiliate_commission_and_revenue(
 
 
 # -------------------------------------------------------------------
-# Dynamic Payout Load Balancer (Unified with Selected Tier Price)
+# Dynamic Payout Load Balancer
 # -------------------------------------------------------------------
 async def select_optimal_payout_destination(amount_etb: int, partner_id: str = None) -> tuple[str, str, int, str]:
     if partner_id and supabase:
@@ -1123,7 +1145,7 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands (Clean Enterprise UI)
+# Telegram Master Bot Handlers & Commands
 # -------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1167,7 +1189,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Store tier check error: {e}")
 
-    if sub_data["is_pro"]:
+    if sub_data["is_pro"] and has_access:
         status_text = f"⭐ ፕሮ አባል (VIP Elite Pro — {store_tier_name}) — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ።"
     elif has_access:
         fomo_hook = ""
@@ -1624,7 +1646,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------------------------
-# AI Self-Healing & Auto-Correction Auditor (Nexa & Connected Bots)
+# AI Self-Healing & Auto-Correction Auditor
 # -------------------------------------------------------------------
 async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
     if not supabase:
@@ -1949,7 +1971,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # -------------------------------------------------------------------
-# Phone Number & AI Voice Control Commands (/setphone, /stopvoice, /startvoice)
+# Phone Number & AI Voice Control Commands
 # -------------------------------------------------------------------
 async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
@@ -2203,34 +2225,62 @@ class TierSyncModel(BaseModel):
     user_id: str | int
     plan_tier: int
     months: int = 1
-    pwd: str
+    pwd: str = ""
 
 class BroadcastModel(BaseModel):
     message: str
     target: str = "all"
-    pwd: str
+    pwd: str = ""
 
 class DirectChatModel(BaseModel):
     chat_id: str | int
     message: str
-    pwd: str
+    pwd: str = ""
 
 class SupportReplyModel(BaseModel):
     ticket_id: str | int
     user_id: str | int
     reply: str
-    pwd: str
+    pwd: str = ""
 
 class AffiliatePayoutModel(BaseModel):
     partner_id: str
     amount_paid: float
     reference_note: str = ""
-    pwd: str
+    pwd: str = ""
+
+class StoreActionModel(BaseModel):
+    bot_token: str
+    action: str  # "pause_voice", "resume_voice", "delete_store"
+    pwd: str = ""
+
+
+@app.post("/admin/store-action")
+async def admin_store_action(data: StoreActionModel, x_admin_password: str = Header(None)):
+    """Allows the Admin HTML Dashboard to control any connected store live (Pause/Resume Voice or Delete Bot)."""
+    if not verify_admin_pwd(data.pwd, x_admin_password):
+        return {"status": "error", "message": "Unauthorized password"}
+    if not supabase:
+        return {"status": "error", "message": "Supabase not connected"}
+
+    try:
+        if data.action == "pause_voice":
+            await asyncio.to_thread(lambda: supabase.table("stores").update({"voice_ai_active": False}).eq("bot_token", data.bot_token).execute())
+        elif data.action == "resume_voice":
+            await asyncio.to_thread(lambda: supabase.table("stores").update({"voice_ai_active": True}).eq("bot_token", data.bot_token).execute())
+        elif data.action == "delete_store":
+            await asyncio.to_thread(lambda: supabase.table("stores").delete().eq("bot_token", data.bot_token).execute())
+            if http_client:
+                await http_client.post(f"https://api.telegram.org/bot{data.bot_token}/deleteWebhook")
+        return {"status": "success", "action": data.action}
+    except Exception as e:
+        logger.error(f"Store action error: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/admin/broadcast")
-async def admin_broadcast(data: BroadcastModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+async def admin_broadcast(data: BroadcastModel, x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     if not supabase:
         return {"status": "error", "message": "Supabase not connected"}
@@ -2271,8 +2321,8 @@ async def admin_broadcast(data: BroadcastModel):
 
 
 @app.post("/admin/record-payout")
-async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+async def admin_record_affiliate_payout(data: AffiliatePayoutModel, x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     if not supabase:
         return {"status": "error", "message": "Supabase not connected"}
@@ -2304,7 +2354,6 @@ async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
             }).eq("partner_id", str(data.partner_id)).eq("payout_status", "pending").execute())
         )
 
-        # Notify Affiliate on Telegram that their payout was sent
         try:
             await http_client.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -2332,8 +2381,8 @@ async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
 
 
 @app.post("/admin/support-reply")
-async def admin_support_reply(data: SupportReplyModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+async def admin_support_reply(data: SupportReplyModel, x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     
     if supabase:
@@ -2371,8 +2420,8 @@ async def admin_support_reply(data: SupportReplyModel):
 
 
 @app.post("/admin/sync-tier")
-async def sync_tier(data: TierSyncModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+async def sync_tier(data: TierSyncModel, x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     
     user_id_str = str(data.user_id)
@@ -2392,6 +2441,7 @@ async def sync_tier(data: TierSyncModel):
                 lambda: supabase.table("subscriptions").upsert({
                     "user_id": user_id_str,
                     "is_pro": True,
+                    "plan_tier": tier,
                     "trial_expires": expires_at.isoformat(),
                     "credits_remaining": credits
                 }).execute()
@@ -2424,8 +2474,8 @@ async def sync_tier(data: TierSyncModel):
 
 
 @app.post("/admin/send-message")
-async def send_direct_message(data: DirectChatModel):
-    if data.pwd != ADMIN_PANEL_PASSWORD:
+async def send_direct_message(data: DirectChatModel, x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     try:
         await http_client.post(
@@ -2587,16 +2637,20 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 if s_res.data:
                     store_tier = int(s_res.data[0].get("plan_tier") or 1)
 
+                expires_at = datetime.now(timezone.utc) + timedelta(days=30)
                 await asyncio.to_thread(lambda: supabase.table("processed_receipts").insert({
                     "user_id": str(user_id), "order_id": order["order_id"], "reference_id": ref_id,
                     "amount": expected_amount_str, "channel": order["channel"], "created_at": datetime.now(timezone.utc).isoformat()
                 }).execute())
                 await asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
-                    "user_id": str(user_id), "is_pro": True, "plan_tier": store_tier, "credits_remaining": 999999
+                    "user_id": str(user_id),
+                    "is_pro": True,
+                    "plan_tier": store_tier,
+                    "credits_remaining": 999999,
+                    "trial_expires": expires_at.isoformat()
                 }).execute())
                 await asyncio.to_thread(lambda: supabase.table("pending_orders").delete().eq("user_id", str(user_id)).execute())
 
-                # Record total income + automatic 25% affiliate / 75% owner net split
                 await record_affiliate_commission_and_revenue(
                     user_id=str(user_id),
                     amount_etb=float(expected_amount_str),
@@ -2653,7 +2707,6 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_master_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Transcribes incoming voice notes to the master bot and routes them through the intent engine."""
     voice = update.effective_message.voice
     if not voice or not TELEGRAM_BOT_TOKEN:
         return
@@ -2703,7 +2756,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
                          f"• Sender: **{full_name_str}** ({username_str})\n"
                          f"• Telegram ID: `{user_id}`\n"
                          f"• Question: {ticket_msg}\n\n"
-                         f"Reply directly from your Web Admin App.",
+                         f"Reply directly from your Web Admin App ({NETLIFY_DASHBOARD_URL}).",
                     parse_mode="Markdown"
                 )
             except Exception:
@@ -2783,7 +2836,6 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
         tier_info = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])
         base_price = tier_info["price"]
-        
         exact_amount_etb = random.randint(base_price, base_price + 100)
 
         partner_id = None
@@ -2893,7 +2945,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 @app.on_event("startup")
 async def startup_event():
     global http_client
-    http_client = httpx.AsyncClient(timeout=10.0)
+    http_client = httpx.AsyncClient(timeout=15.0)
     await telegram_app.initialize()
     await telegram_app.start() 
     await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
@@ -2909,7 +2961,12 @@ async def shutdown_event():
 
 
 @app.post("/webhook")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str = Header(None)):
+    """Enforces strict Telegram Webhook Secret verification to block unauthorized webhook spoofing."""
+    if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
+        logger.warning("⚠️ Blocked unauthorized Telegram webhook call with invalid secret token!")
+        raise HTTPException(status_code=403, detail="Invalid Telegram Webhook Secret Token")
+
     update = Update.de_json(await request.json(), telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
@@ -2942,7 +2999,6 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     if not chat_id:
         return {"ok": True}
 
-    # Transcribe incoming voice message on tenant store bots via Groq Whisper AI
     if not user_text and voice_obj and voice_obj.get("file_id"):
         asyncio.create_task(http_client.post(
             f"https://api.telegram.org/bot{bot_token}/sendChatAction",
