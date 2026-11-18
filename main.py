@@ -1312,28 +1312,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Store tier check error: {e}")
 
     if sub_data["is_pro"] and has_access:
-        status_text = f"⭐ ፕሮ አባል (VIP Elite Pro — {store_tier_name}) — ያልተወሰነ የብዙ ቦት ሽያጭ ስርዓትዎ በሥራ ላይ አለ።"
+        status_text = f"⭐ ንቁ አባልነት (VIP Enterprise — {store_name if 'store_name' in locals() else store_tier_name}) — የንግድ አውቶሜሽን ስርዓትዎ በሥራ ላይ አለ።"
     elif has_access:
-        fomo_hook = ""
-        if remaining_days <= 2:
-            fomo_hook = f"\n🔥 FOMO ALERT: የነጻ የሙከራ ጊዜዎ ሊጠናቀቅ {remaining_days} ቀን ብቻ ቀረው! አሁን ካልከፈሉ ቦትዎ ይቋረጣል።"
         status_text = (
-            f"🔥 የነጻ የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
+            f"📋 የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
             f"• የቀረው ጊዜ: {remaining_days} ቀናት\n"
             f"• የሚያበቃበት ጊዜ: {trial_exp.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}{fomo_hook}"
+            f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
         )
     else:
-        status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — ቦቶችዎ እንዳይቆሙ በብር ፕሮ አባልነት ያሻሽሉ።"
+        status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — አገልግሎቱ እንዳይቋረጥ አባልነትዎን ያሻሽሉ።"
 
     welcome_text = (
-        f"🌟 NEXA AI BOT ENGINE 🤖\n"
+        f"🌟 NEXA AI COMMERCE PLATFORM 🤖\n"
         f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /advice - 🎓 የፕሮፌሰር ኔክሳ የኢኮኖሚ እና የትርፍ ማሳደጊያ ምክር (Prof. Nexa Business Advice)\n"
-        "2️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "3️⃣ /partner - የ Nexa አጋር በመሆን ያለ ካፒታል 1/4 (25%) ኮሚሽን ያግኙ\n"
+        "1️⃣ /advice - 🎓 የኢኮኖሚ እና የንግድ ዕድገት አማካሪ (Business Strategy Advice)\n"
+        "2️⃣ /register - አዲስ የ AI ሱቅ ቦት ይፍጠሩ\n"
+        "3️⃣ /partner - የ Nexa አጋር በመሆን 25% ኮሚሽን ያግኙ\n"
         "4️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
         "5️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
         "6️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
@@ -1343,10 +1340,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     keyboard = [
-        [InlineKeyboardButton("🎓 የፕሮፌሰር የንግድ እና ኢኮኖሚ ምክር (Prof. Business Advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (Business Strategy Advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")],
-        [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🤝 Nexa Partnership (ያለ ካፒታል 25% ኮሚሽን)", callback_data="partner_menu")],
+        [InlineKeyboardButton("🚀 አባልነት ያሻሽሉ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🤝 Nexa Partnership (25% ኮሚሽን ፕሮግራም)", callback_data="partner_menu")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
@@ -2074,17 +2071,17 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     cool_advert_text = (
-        f"🤖🔥 **NEXA ELITE BOT CREATED SUCCESSFULLY!**\n\n"
-        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በከፍተኛ ቴክኖሎጂ እና በኃይለኛ የ AI ሻጭ ተሞልቷል።\n"
-        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል!\n"
-        f"• የተመረጠው ደረጃ: {tier_info['name']}\n"
-        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ Groq AI እና Cloud Webhook ጋር ተገናኝቷል!\n\n"
-        f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን አሻሽለው Elite Features ማግኘት ይችላሉ!"
+        f"🤖 **የንግድ መደብር ቦትዎ በተሳካ ሁኔታ ተፈጥሯል!**\n\n"
+        f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በዘመናዊ የ AI ሻጭ ረዳት ተዋቅሯል።\n"
+        f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል\n"
+        f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
+        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n\n"
+        f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
     
     keyboard = [
-        [InlineKeyboardButton("🚀 አባልነት አሻሽል (Upgrade / Pay)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🎓 የፕሮፌሰር የንግድ ምክር (/advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (/advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
     ]
     
@@ -2799,11 +2796,11 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.error(f"DB Error: {e}")
 
         appreciation_msg = (
-            f"🎉 **ክፍያዎ በድምቀት ተረጋግጧል! እናመሰግናለን!** ⭐🇪🇹\n\n"
-            f"✨ ሠላም **{expected_payer_name}**! ንግድዎ ወደሚቀጥለው የላቀ የስኬት ከፍታ እንዲሸጋገር Nexa AI ከጎንዎ አብሮለታል። "
-            f"አሁን ሁሉም ፕሪሚየም እና Elite Features (ያልተወሰነ AI፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ) ሙሉ በሙሉ ተከፍተዋል!\n\n"
+            f"🎉 **ክፍያዎ በተሳካ ሁኔታ ተረጋግጧል! እናመሰግናለን!** ⭐🇪🇹\n\n"
+            f"✨ ሠላም **{expected_payer_name}**! ንግድዎ በብቃት እንዲቀጥል Nexa AI ከጎንዎ አብሮለታል። "
+            f"አሁን ሁሉም ፕሪሚየም አገልግሎቶች ሙሉ በሙሉ ተከፍተዋል!\n\n"
             f"• የግብይት ማረጋገጫ ቁጥር: `{ref_id}`\n"
-            f"🚀 ቦቶችዎ ያለ ምንም ገደብ በከፍተኛ ፍጥነት በመሥራት ላይ ይገኛሉ!"
+            f"🚀 ቦቶችዎ ያለ ምንም ገደብ በሥራ ላይ ይገኛሉ!"
         )
         await update.effective_message.reply_text(appreciation_msg, parse_mode="Markdown")
     else:
@@ -2836,7 +2833,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 pass
         frustration_fix_text = (
             "⚠️ **የክፍያ ማረጋገጫው በራስ-ሰር ሊመሳሰል አልቻለም።**\n\n"
-            "💡 ደረሰኝዎ ወደ Nexa Elite Web Admin Dashboard ተልኳል። አስተዳዳሪው በአጭር ጊዜ ውስጥ አረጋግጦ አካውንትዎን ያጸድቅልዎታል!"
+            "💡 ደረሰኝዎ ወደ Nexa Web Admin Dashboard ተልቋል። አስተዳዳሪው በአጭር ጊዜ ውስጥ አረጋግጦ አካውንትዎን ያጸድቅልዎታል!"
         )
         await update.effective_message.reply_text(frustration_fix_text, parse_mode="Markdown")
 
