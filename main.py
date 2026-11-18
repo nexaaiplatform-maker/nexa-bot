@@ -1152,7 +1152,7 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 # Telegram Master Bot Handlers & Prof. Nexa Economic Advisor
 # -------------------------------------------------------------------
 async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Starts the interactive Professor of Economics & Business Growth Advisor session."""
+    """Starts the interactive Professor of Economics & Business Growth Advisor session with chat understanding."""
     context.user_data["advice_step"] = "awaiting_business_type"
     
     intro_text = (
@@ -1160,15 +1160,15 @@ async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "ሰላም! እኔ የኢኮኖሚ እና የቢዝነስ ፕሮፌሰር ረዳትዎ ነኝ። ንግድዎን ያለ ምንም ተጨማሪ ኪሳራ በትርፍ እንዲያሳድጉ፣ "
         "ገበያውን እንዲቆጣጠሩ እና ገቢዎን በእጥፍ እንዲጨምሩ ልዩ ስልታዊ ምክር እሰጥዎታለሁ!\n\n"
-        "📌 **ለመጀመር፣ አሁን ያሉበትን የንግድ ዘርፍ ወይም ዓላማ ከታች ካሉት አማራጮች ይምረጡ (ወይም በጽሑፍ ይንገሩኝ):**"
+        "🧠 **በቀጥታ ከእኔ ጋር ማውራት ይችላሉ!** ከዚህ በታች ካሉት ዘርፎች መምረጥ ወይም የሚፈልጉትን ማንኛውንም የንግድ ወይም የኢኮኖሚ ጥያቄ በቀጥታ በጽሑፍ ወይም በድምጽ (Voice Note) መጠየቅ ይችላሉ።\n\n"
+        "📌 **የንግድ ዘርፍዎን ይምረጡ (ወይም በቀጥታ ይጻፉኝ):**"
     )
     
     keyboard = [
         [InlineKeyboardButton("🛍️ ችርቻሮ / ሱቅ / ኢ-ኮሜርስ (Retail & Shop)", callback_data="adv_type_retail")],
         [InlineKeyboardButton("🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate)", callback_data="adv_type_realestate")],
         [InlineKeyboardButton("🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)", callback_data="adv_type_hospitality")],
-        [InlineKeyboardButton("💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)", callback_data="adv_type_services")],
-        [InlineKeyboardButton("🌱 ገና ንግድ ልጀምር ነው (Starting a New Business)", callback_data="adv_type_startup")],
+        [InlineKeyboardButton("💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)", callback_data="adv_type_startup")],
         [InlineKeyboardButton("💰 ካፒታል አለኝ — ምን ልስራ? (Investment Advice)", callback_data="adv_type_investor")],
         [InlineKeyboardButton("🔙 ወደ ዋና ገጽ ይመለሱ", callback_data="start_menu")]
     ]
@@ -1189,7 +1189,7 @@ async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_T
         "አሁን ደግሞ እንደ ኢኮኖሚ ፕሮፌሰር ትክክለኛውን የትርፍ ቀመር እንድነድፍልዎ **አሁን ያሉበትን ሁኔታ** በአጭሩ ይንገሩኝ፦\n"
         "1️⃣ በእጅዎ ያለው ካፒታል ወይም ወርሃዊ ገቢ ስንት ነው?\n"
         "2️⃣ ዋናው ችግርዎ ምንድን ነው? (ለምሳሌ፡ የደንበኛ እጥረት፣ የዋጋ ውድድር፣ ወይም አዲስ ገበያ ማግኘት)\n\n"
-        "✍️ *ሁኔታዎን ከታች ይጻፉ (ወይም በድምጽ Voice Note ይላኩ)...*"
+        "✍️ *ማንኛውንም ጥያቄ ወይም ሁኔታዎን ከታች በጽሑፍ ወይም በድምጽ (Voice Note) ይጻፉልኝ...*"
     )
     
     keyboard = [[InlineKeyboardButton("🔙 ዘርፍ ቀይር", callback_data="business_advice_menu")]]
@@ -1200,7 +1200,7 @@ async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def generate_professor_economic_advice(update: Update, context: ContextTypes.DEFAULT_TYPE, user_situation: str):
-    """Uses Groq AI to deliver deep, practical Ethiopian market economic & profit-maximization advice."""
+    """Uses Groq AI to deliver deep, practical Ethiopian market economic & profit-maximization advice with full chat understanding."""
     user_id = str(update.effective_user.id)
     business_type = context.user_data.get("advice_business_type", "አጠቃላይ ንግድ (General Business)")
     
@@ -1222,15 +1222,15 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
     You are 'Prof. Nexa' (ፕሮፌሰር ኔክሳ), an elite, world-class Professor of Economics, Behavioral Finance, and Business Growth Strategist specializing in the Ethiopian economy (Addis Ababa & regional markets, ETB currency, Telebirr digital commerce, import/local supply chains, and high-margin customer acquisition).
 
     User's Business Type: {business_type}
-    User's Current Situation & Capital/Challenges: {user_situation}
+    User's Current Chat / Situation & Capital/Challenges: {user_situation}
     {existing_store_info}
 
     Your mission:
-    1. Analyze their exact situation like a caring, brilliant Economics Professor who genuinely wants them to make maximum profit and build sustainable wealth.
-    2. Give them 3 concrete, actionable, zero-waste strategies to immediately increase their profit margin and attract high-paying Ethiopian customers without wasting money.
+    1. Understand the user's chat input deeply. Provide intellectual, tailored, practical economic and financial advice like a caring, brilliant Economics Professor who genuinely wants them to make maximum profit and build sustainable wealth.
+    2. Give them 3 concrete, actionable, zero-waste strategies to immediately increase their profit margin, price optimization, and attract high-paying Ethiopian customers without wasting money.
     3. Show them how to make money for FREE right now using zero-capital growth hacks + Nexa AI automation (e.g., capturing every Telegram lead 24/7, upselling bundles, and earning 25% recurring commission via the Nexa Partner Affiliate program `/partner` with zero capital).
     4. Write in eloquent, warm, inspiring, grammatically flawless Amharic (በጣም የዳበረ፣ ተግባራዊ እና አነቃቂ አማርኛ). Use clear bullet points and bold headers.
-    5. End by inviting them to ask a follow-up question about pricing, marketing, or capital allocation so they rely on Prof. Nexa as their permanent business mentor.
+    5. End by encouraging them to ask further follow-up questions about pricing, marketing, or capital allocation so they rely on Prof. Nexa as their permanent business mentor.
     """
 
     advice_reply = (
@@ -2853,7 +2853,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
-    # 1. Prof. Nexa Business & Economic Advisor Interactive Flow
+    # 1. Prof. Nexa Business & Economic Advisor Interactive Flow with chat understanding
     advice_step = context.user_data.get("advice_step")
     if advice_step == "awaiting_business_type":
         await ask_business_situation(update, context, user_text.strip())
@@ -3040,9 +3040,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     system_prompt = (
-        "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
-        "The user might be asking random questions, seeking business/economic advice, or might have registered a bot earlier and forgotten what to do. "
-        "If they ask about business growth, making money, profit, or economics, classify as 'advice'. "
+        "You are Nexa AI Master Assistant and Professor of Economics. Analyze user intent from Amharic/English message. "
+        "The user might be asking random economic questions, seeking business strategy advice, or might have registered a bot earlier and forgotten what to do. "
+        "If they ask about business growth, making money, pricing, profit, or economics, classify as 'advice'. "
         "Otherwise guide them clearly on what to click or type (e.g. /advice, /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic. "
         "Classify into: 'advice', 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'general'. "
