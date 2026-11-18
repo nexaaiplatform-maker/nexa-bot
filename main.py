@@ -45,14 +45,16 @@ app.add_middleware(
 # -------------------------------------------------------------------
 # Configuration & Environment Variables
 # -------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9012733890:AAHzbRZiqhYKXu9b0s8I7wwMls3QbWA4Q-Q")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyewcrbtfaswqwqxqimu.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_9BpdgIToqgXcifWFNFVCSg_A_DjddNS")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "7506853313")
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
+NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app")
+NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0")
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
@@ -118,6 +120,180 @@ PARTNER_TELEBIRR = 100
 STORE_PHONE = 101       
 CHANGE_PHONE = 102      
 SUPPORT_TICKET = 103    
+
+
+# -------------------------------------------------------------------
+# Helper: Parse ISO Timestamps Safely
+# -------------------------------------------------------------------
+def parse_dt(dt_str):
+    if not dt_str:
+        return datetime.now(timezone.utc) + timedelta(days=3)
+    if isinstance(dt_str, datetime):
+        return dt_str
+    try:
+        clean = dt_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(clean)
+    except Exception:
+        return datetime.now(timezone.utc) + timedelta(days=3)
+
+
+# -------------------------------------------------------------------
+# Subscription & User Access Management
+# -------------------------------------------------------------------
+async def get_or_create_user_subscription(user_id: int):
+    now = datetime.now(timezone.utc)
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
+            )
+            if res.data:
+                sub = res.data[0]
+                return {
+                    "trial_expires": parse_dt(sub["trial_expires"]),
+                    "credits_remaining": sub["credits_remaining"],
+                    "is_pro": sub["is_pro"]
+                }
+        except Exception as e:
+            logger.error(f"Subscription fetch error: {e}")
+
+    default_expiry = now + timedelta(days=3)
+    default_sub = {
+        "trial_expires": default_expiry,
+        "credits_remaining": 50,
+        "is_pro": False
+    }
+    
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").upsert({
+                    "user_id": str(user_id),
+                    "trial_expires": default_expiry.isoformat(),
+                    "credits_remaining": 50,
+                    "is_pro": False
+                }).execute()
+            )
+        except Exception as e:
+            logger.error(f"Subscription upsert error: {e}")
+            
+    return default_sub
+
+
+async def verify_active_access(user_id: int) -> bool:
+    try:
+        sub = await get_or_create_user_subscription(user_id)
+        if sub["is_pro"]:
+            return True
+        now = datetime.now(timezone.utc)
+        trial_exp = parse_dt(sub["trial_expires"])
+        if now < trial_exp and sub["credits_remaining"] > 0:
+            return True
+    except Exception as e:
+        logger.error(f"Access verification error: {e}")
+        return True
+    return False
+
+
+async def deduct_credit(user_id: int):
+    try:
+        sub = await get_or_create_user_subscription(user_id)
+        if not sub["is_pro"] and supabase:
+            new_credits = max(0, sub["credits_remaining"] - 1)
+            await asyncio.to_thread(
+                lambda: supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
+            )
+    except Exception as e:
+        logger.error(f"Credit deduction error: {e}")
+
+
+async def log_visitor(user_id: int):
+    if supabase:
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("store_visitors").upsert({
+                    "user_id": str(user_id),
+                    "last_visit": datetime.now(timezone.utc).isoformat()
+                }, on_conflict="user_id").execute()
+            )
+        except Exception as e:
+            logger.error(f"Visitor logging error: {e}")
+
+
+# -------------------------------------------------------------------
+# Telegram Voice Transcription via Groq Whisper AI
+# -------------------------------------------------------------------
+async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
+    """Downloads voice note from Telegram and transcribes it using Groq Whisper API."""
+    if not async_groq_client or not http_client:
+        return ""
+    try:
+        file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
+        file_path = file_resp.json().get("result", {}).get("file_path")
+        if not file_path:
+            return ""
+        
+        audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
+        audio_data = audio_bytes_resp.content
+
+        transcription = await async_groq_client.audio.transcriptions.create(
+            file=("voice.ogg", audio_data),
+            model="whisper-large-v3",
+            prompt="Transcribe speech in Amharic, English, or Oromo accurately.",
+            response_format="text"
+        )
+        return transcription.strip() if isinstance(transcription, str) else str(transcription.get("text", "")).strip()
+    except Exception as e:
+        logger.error(f"Voice transcription error: {e}")
+        return ""
+
+
+@app.get("/")
+async def root_health():
+    return {
+        "status": "online",
+        "service": "Nexa AI Elite Commerce Backend",
+        "render_url": RENDER_EXTERNAL_URL,
+        "netlify_dashboard": NETLIFY_DASHBOARD_URL,
+        "netlify_project_id": NETLIFY_PROJECT_ID,
+        "supabase_connected": bool(supabase),
+        "groq_connected": bool(async_groq_client),
+        "telegram_connected": bool(TELEGRAM_BOT_TOKEN)
+    }
+
+
+@app.get("/admin/live-data")
+async def admin_live_data(pwd: str = ""):
+    """Live JSON sync endpoint for the Netlify Admin Dashboard & HTML Command Center."""
+    if pwd != ADMIN_PANEL_PASSWORD:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    if not supabase:
+        return {"status": "error", "message": "Supabase not connected"}
+
+    try:
+        r1, r2, r3, r4, r5, r6, r7 = await asyncio.gather(
+            asyncio.to_thread(lambda: supabase.table("manual_review_queue").select("*").order("created_at", desc=True).limit(50).execute()),
+            asyncio.to_thread(lambda: supabase.table("stores").select("*").execute()),
+            asyncio.to_thread(lambda: supabase.table("subscriptions").select("*").execute()),
+            asyncio.to_thread(lambda: supabase.table("leads").select("*").order("updated_at", desc=True).limit(100).execute()),
+            asyncio.to_thread(lambda: supabase.table("partners").select("*").execute()),
+            asyncio.to_thread(lambda: supabase.table("support_tickets").select("*").order("created_at", desc=True).limit(50).execute()),
+            asyncio.to_thread(lambda: supabase.table("paid_subscriptions").select("*").order("created_at", desc=True).limit(100).execute())
+        )
+        return {
+            "status": "success",
+            "manual_reviews": r1.data or [],
+            "stores": r2.data or [],
+            "subscriptions": r3.data or [],
+            "leads": r4.data or [],
+            "partners": r5.data or [],
+            "support_tickets": r6.data or [],
+            "paid_subscriptions": r7.data or [],
+            "tier_config": TIER_CONFIG
+        }
+    except Exception as e:
+        logger.error(f"Admin live data fetch error: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # -------------------------------------------------------------------
@@ -712,6 +888,61 @@ async def view_telegram_receipt(file_id: str, pwd: str = ""):
     return RedirectResponse(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}")
 
 
+class ReviewActionJSONModel(BaseModel):
+    review_id: int
+    user_id: str | int
+    plan_tier: int = 1
+    decision: str
+    pwd: str
+
+
+@app.post("/admin/review-action-json")
+async def admin_payment_action_json(data: ReviewActionJSONModel):
+    """JSON API endpoint for approving/rejecting payment reviews directly from Netlify HTML Admin Dashboard."""
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    if not supabase:
+        return {"status": "error", "message": "Supabase not connected"}
+
+    user_id = str(data.user_id)
+    plan_tier = int(data.plan_tier or 1)
+    review_id = int(data.review_id)
+
+    try:
+        if data.decision == "approve":
+            credits = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["credits"]
+            tier_price = float(TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["price"])
+            await asyncio.gather(
+                asyncio.to_thread(lambda: supabase.table("subscriptions").upsert({
+                    "user_id": user_id, "is_pro": True, "plan_tier": plan_tier, "credits_remaining": credits
+                }).execute()),
+                asyncio.to_thread(lambda: supabase.table("stores").update({"plan_tier": plan_tier}).eq("owner_telegram_id", user_id).execute()),
+                asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "approved"}).eq("id", review_id).execute())
+            )
+            await record_affiliate_commission_and_revenue(
+                user_id=user_id,
+                amount_etb=tier_price,
+                plan_tier=plan_tier,
+                order_id=f"MANUAL-{review_id}",
+                channel="MANUAL_APPROVED",
+                reference_id=f"REV-{review_id}"
+            )
+            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                "chat_id": int(user_id),
+                "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
+            })
+        else:
+            await asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "rejected"}).eq("id", review_id).execute())
+            await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                "chat_id": int(user_id),
+                "text": "⚠️ የላኩት የክፍያ ደረሰኝ ትክክለኛ ሆኖ አልተገኘም። እባክዎ ትክክለኛውን ደረሰኝ በድጋሚ ይላኩ።"
+            })
+        return {"status": "success", "decision": data.decision}
+    except Exception as e:
+        logger.error(f"JSON review action error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/admin/action")
 async def admin_payment_action(
     pwd: str = Form(...),
@@ -845,79 +1076,6 @@ async def record_affiliate_commission_and_revenue(
                 )
     except Exception as e:
         logger.error(f"Affiliate revenue split calculation error: {e}")
-                lambda: supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
-            )
-            if res.data:
-                sub = res.data[0]
-                return {
-                    "trial_expires": parse_dt(sub["trial_expires"]),
-                    "credits_remaining": sub["credits_remaining"],
-                    "is_pro": sub["is_pro"]
-                }
-        except Exception as e:
-            logger.error(f"Subscription fetch error: {e}")
-
-    default_expiry = now + timedelta(days=3)
-    default_sub = {
-        "trial_expires": default_expiry,
-        "credits_remaining": 50,
-        "is_pro": False
-    }
-    
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("subscriptions").upsert({
-                    "user_id": str(user_id),
-                    "trial_expires": default_expiry.isoformat(),
-                    "credits_remaining": 50,
-                    "is_pro": False
-                }).execute()
-            )
-        except Exception as e:
-            logger.error(f"Subscription upsert error: {e}")
-            
-    return default_sub
-
-
-async def verify_active_access(user_id: int) -> bool:
-    try:
-        sub = await get_or_create_user_subscription(user_id)
-        if sub["is_pro"]:
-            return True
-        now = datetime.now(timezone.utc)
-        trial_exp = parse_dt(sub["trial_expires"])
-        if now < trial_exp and sub["credits_remaining"] > 0:
-            return True
-    except Exception as e:
-        logger.error(f"Access verification error: {e}")
-        return True
-    return False
-
-
-async def deduct_credit(user_id: int):
-    try:
-        sub = await get_or_create_user_subscription(user_id)
-        if not sub["is_pro"] and supabase:
-            new_credits = max(0, sub["credits_remaining"] - 1)
-            await asyncio.to_thread(
-                lambda: supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
-            )
-    except Exception as e:
-        logger.error(f"Credit deduction error: {e}")
-
-
-async def log_visitor(user_id: int):
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("store_visitors").upsert({
-                    "user_id": str(user_id),
-                    "last_visit": datetime.now(timezone.utc).isoformat()
-                }, on_conflict="user_id").execute()
-            )
-        except Exception as e:
-            logger.error(f"Visitor logging error: {e}")
 
 
 # -------------------------------------------------------------------
@@ -997,7 +1155,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(timezone.utc)
     remaining_days = max(0, (trial_exp - now).days)
     
-    # Check if user has an active store and get its tier
     store_tier_name = "Starter"
     if supabase:
         try:
@@ -1435,7 +1592,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
         f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}\n"
         f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠقم!"
+        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
     )
     await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
 
@@ -1484,7 +1641,7 @@ async def run_ai_system_audit_and_heal(target_owner_id: str = None) -> str:
                 if wh_info.status_code == 200:
                     current_wh_url = wh_info.json().get("result", {}).get("url", "")
                     if current_wh_url != expected_master_wh:
-                        await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh}, timeout=5.0)
+                        await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook", json={"url": expected_master_wh, "secret_token": TELEGRAM_WEBHOOK_SECRET}, timeout=5.0)
                         repaired_webhooks += 1
             except Exception as master_wh_err:
                 logger.error(f"Master webhook audit error: {master_wh_err}")
@@ -2040,7 +2197,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
 
 
 # -------------------------------------------------------------------
-# Admin Sync Tier, Support Reply & Broadcast Endpoints
+# Admin Sync Tier, Support Reply, Payouts & Broadcast Endpoints
 # -------------------------------------------------------------------
 class TierSyncModel(BaseModel):
     user_id: str | int
@@ -2069,6 +2226,49 @@ class AffiliatePayoutModel(BaseModel):
     amount_paid: float
     reference_note: str = ""
     pwd: str
+
+
+@app.post("/admin/broadcast")
+async def admin_broadcast(data: BroadcastModel):
+    if data.pwd != ADMIN_PANEL_PASSWORD:
+        return {"status": "error", "message": "Unauthorized password"}
+    if not supabase:
+        return {"status": "error", "message": "Supabase not connected"}
+
+    try:
+        stores_res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("owner_telegram_id").execute()
+        )
+        owner_ids = list({str(s["owner_telegram_id"]) for s in (stores_res.data or []) if s.get("owner_telegram_id")})
+        
+        sent_count = 0
+        broadcast_text = (
+            f"📢 **NEXA AI OFFICIAL ANNOUNCEMENT**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{data.message}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💎 Nexa AI Elite Team"
+        )
+        for oid in owner_ids:
+            try:
+                resp = await http_client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": int(oid),
+                        "text": broadcast_text,
+                        "parse_mode": "Markdown"
+                    }
+                )
+                if resp.status_code == 200:
+                    sent_count += 1
+            except Exception as send_err:
+                logger.error(f"Broadcast failed for owner {oid}: {send_err}")
+
+        return {"status": "success", "sent": sent_count, "total_targets": len(owner_ids)}
+    except Exception as e:
+        logger.error(f"Admin broadcast error: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 @app.post("/admin/record-payout")
 async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
@@ -2130,6 +2330,7 @@ async def admin_record_affiliate_payout(data: AffiliatePayoutModel):
         logger.error(f"Record payout error: {e}")
         return {"status": "error", "message": str(e)}
 
+
 @app.post("/admin/support-reply")
 async def admin_support_reply(data: SupportReplyModel):
     if data.pwd != ADMIN_PANEL_PASSWORD:
@@ -2167,6 +2368,7 @@ async def admin_support_reply(data: SupportReplyModel):
         return {"status": "error", "message": str(e)}
 
     return {"status": "success", "message": "Support reply sent successfully"}
+
 
 @app.post("/admin/sync-tier")
 async def sync_tier(data: TierSyncModel):
@@ -2220,6 +2422,7 @@ async def sync_tier(data: TierSyncModel):
 
     return {"status": "success", "message": f"Successfully synced user {user_id_str} to Tier {tier} for {months} month(s)."}
 
+
 @app.post("/admin/send-message")
 async def send_direct_message(data: DirectChatModel):
     if data.pwd != ADMIN_PANEL_PASSWORD:
@@ -2239,7 +2442,7 @@ async def send_direct_message(data: DirectChatModel):
 
 
 # -------------------------------------------------------------------
-# Button, Receipt & Master Message Handlers
+# Button, Receipt & Master Message / Voice Handlers
 # -------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2449,8 +2652,22 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text(frustration_fix_text, parse_mode="Markdown")
 
 
-async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.effective_message.text
+async def handle_master_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Transcribes incoming voice notes to the master bot and routes them through the intent engine."""
+    voice = update.effective_message.voice
+    if not voice or not TELEGRAM_BOT_TOKEN:
+        return
+    await update.effective_message.reply_chat_action("typing")
+    transcribed_text = await transcribe_telegram_voice(TELEGRAM_BOT_TOKEN, voice.file_id)
+    if not transcribed_text:
+        await update.effective_message.reply_text("⚠️ የድምጽ መልዕክትዎን መተርጎም አልተቻለም። እባክዎ በጽሑፍ ይጻፉ ወይም እንደገና ይሞክሩ።")
+        return
+    await update.effective_message.reply_text(f"🎙️ *የተተረጎመ ድምጽ:* _{transcribed_text}_", parse_mode="Markdown")
+    await handle_master_message(update, context, override_text=transcribed_text)
+
+
+async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TYPE, override_text: str = None):
+    user_text = override_text if override_text is not None else (update.effective_message.text if update.effective_message else "")
     if not user_text:
         return
 
@@ -2679,7 +2896,7 @@ async def startup_event():
     http_client = httpx.AsyncClient(timeout=10.0)
     await telegram_app.initialize()
     await telegram_app.start() 
-    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
+    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
 
     asyncio.create_task(run_ai_system_audit_and_heal())
 
@@ -2706,6 +2923,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     chat_obj = message.get("chat", {})
     chat_id = chat_obj.get("id")
     user_text = message.get("text", "")
+    voice_obj = message.get("voice")
+    
     user_obj = message.get("from", {})
     full_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip()
     if not full_name:
@@ -2720,7 +2939,24 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
     else:
         visitor_name = f"User {chat_id}"
     
-    if not chat_id or not user_text:
+    if not chat_id:
+        return {"ok": True}
+
+    # Transcribe incoming voice message on tenant store bots via Groq Whisper AI
+    if not user_text and voice_obj and voice_obj.get("file_id"):
+        asyncio.create_task(http_client.post(
+            f"https://api.telegram.org/bot{bot_token}/sendChatAction",
+            json={"chat_id": chat_id, "action": "typing"}
+        ))
+        user_text = await transcribe_telegram_voice(bot_token, voice_obj["file_id"])
+        if not user_text:
+            await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": "⚠️ የድምጽ መልዕክትዎን መተርጎም አልተቻለም። እባክዎ በጽሑፍ ይጻፉ።"
+            })
+            return {"ok": True}
+
+    if not user_text:
         return {"ok": True}
 
     store = None
@@ -2786,7 +3022,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
 
         direct_welcome = (
             f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
-            f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
+            f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ ወይም በድምጽ (Voice Note) መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
         await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
             "chat_id": chat_id,
@@ -3095,12 +3331,13 @@ telegram_app.add_handler(CommandHandler("leads", leads_command))
 telegram_app.add_handler(CommandHandler("update", update_command))
 telegram_app.add_handler(CommandHandler("audit", audit_command))
 telegram_app.add_handler(CommandHandler("summary", summary_command))
-telegram_app.add_handler(CommandHandler(ai_voice_call_webhook if False else "weekly_summary", weekly_summary_command))
+telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
 telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
 telegram_app.add_handler(CommandHandler("stopvoice", stop_voice_command))
 telegram_app.add_handler(CommandHandler("startvoice", start_voice_command))
 telegram_app.add_handler(conv_handler)
 telegram_app.add_handler(CallbackQueryHandler(button_handler))
-telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
+telegram_app.add_handler(MessageHandler((filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+telegram_app.add_handler(MessageHandler(filters.VOICE, handle_master_voice))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
