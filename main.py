@@ -1206,7 +1206,6 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
     
     await update.effective_message.reply_chat_action("typing")
     
-    # Check if the user already owns a store on Nexa to personalize the advice
     existing_store_info = ""
     if supabase:
         try:
@@ -1251,7 +1250,6 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
             logger.error(f"Prof Nexa AI generation error: {e}")
             advice_reply = f"⚠️ የAI ትንተና ስህተት አጋጥሟል: {str(e)}"
 
-    # Keep them in continuous mentoring mode so follow-up questions automatically go to Prof. Nexa
     context.user_data["advice_step"] = "mentoring_active"
 
     keyboard = [
@@ -1264,7 +1262,6 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Reset any sub-flows when returning to main menu
     context.user_data.pop("advice_step", None)
     context.user_data.pop("support_ticket_step", None)
     context.user_data.pop("partner_setup_step", None)
@@ -1732,7 +1729,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
         f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}\n"
         f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
+        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠقم!"
     )
     await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
 
