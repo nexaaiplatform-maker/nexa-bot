@@ -1,5 +1,6 @@
 import os
 import re
+import hmac
 import json
 import base64
 import random
@@ -25,22 +26,22 @@ from telegram.ext import (
 )
 
 # -------------------------------------------------------------------
-# Secure Configuration & Environment Variables
+# Secure Configuration & Environment Variables (Synced with Render)
 # -------------------------------------------------------------------
-ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9012733890:AAHzbRZiqhYKXu9b0s8I7wwMls3QbWA4Q-Q")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyewcrbtfaswqwqxqimu.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_9BpdgIToqgXcifWFNFVCSg_A_DjddNS")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "7506853313")
+ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9012733890:AAHzbRZiqhYKXu9b0s8I7wwMls3QbWA4Q-Q").strip()
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyewcrbtfaswqwqxqimu.supabase.co").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_9BpdgIToqgXcifWFNFVCSg_A_DjddNS").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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").strip()
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "7506853313").strip()
 
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988")
-NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app")
-NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988").strip()
+NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
+NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
 
-TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354")
-AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300")
+TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354").strip()
+AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300").strip()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -123,14 +124,18 @@ PARTNER_TELEBIRR = 100
 STORE_PHONE = 101       
 CHANGE_PHONE = 102      
 SUPPORT_TICKET = 103    
+BUSINESS_ADVICE = 104   
 
 
 # -------------------------------------------------------------------
-# Security & Authentication Helpers
+# Constant-Time Security & Authentication Helpers
 # -------------------------------------------------------------------
 def verify_admin_pwd(pwd: str, header_pwd: str = None) -> bool:
-    provided = pwd or header_pwd or ""
-    return provided == ADMIN_PANEL_PASSWORD
+    """Uses constant-time comparison to prevent timing attacks on the admin dashboard."""
+    provided = (pwd or header_pwd or "").strip()
+    if not provided or not ADMIN_PANEL_PASSWORD:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), ADMIN_PANEL_PASSWORD.encode("utf-8"))
 
 
 def parse_dt(dt_str):
@@ -197,7 +202,6 @@ async def verify_active_access(user_id: int) -> bool:
         now = datetime.now(timezone.utc)
         trial_exp = parse_dt(sub["trial_expires"])
         if sub["is_pro"]:
-            # If trial_expires is set far in future by sync-tier, check expiration
             if sub.get("trial_expires") and now > trial_exp:
                 return False
             return True
@@ -319,7 +323,7 @@ async def admin_live_data(pwd: str = "", x_admin_password: str = Header(None)):
 
 
 # -------------------------------------------------------------------
-# Elite Nexa Web Admin Panel Routes
+# Elite Nexa Web Admin Panel & Chat Inspector Routes
 # -------------------------------------------------------------------
 @app.get("/admin/chats/{bot_token}", response_class=HTMLResponse)
 async def admin_view_chats(bot_token: str, pwd: str = ""):
@@ -1145,9 +1149,127 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Commands
+# Telegram Master Bot Handlers & Prof. Nexa Economic Advisor
 # -------------------------------------------------------------------
+async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the interactive Professor of Economics & Business Growth Advisor session."""
+    context.user_data["advice_step"] = "awaiting_business_type"
+    
+    intro_text = (
+        "🎓 **ፕሮፌሰር ኔክሳ — የኢኮኖሚ እና የንግድ ዕድገት አማካሪ (Prof. Nexa Economic & Wealth Strategist)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "ሰላም! እኔ የኢኮኖሚ እና የቢዝነስ ፕሮፌሰር ረዳትዎ ነኝ። ንግድዎን ያለ ምንም ተጨማሪ ኪሳራ በትርፍ እንዲያሳድጉ፣ "
+        "ገበያውን እንዲቆጣጠሩ እና ገቢዎን በእጥፍ እንዲጨምሩ ልዩ ስልታዊ ምክር እሰጥዎታለሁ!\n\n"
+        "📌 **ለመጀመር፣ አሁን ያሉበትን የንግድ ዘርፍ ወይም ዓላማ ከታች ካሉት አማራጮች ይምረጡ (ወይም በጽሑፍ ይንገሩኝ):**"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🛍️ ችርቻሮ / ሱቅ / ኢ-ኮሜርስ (Retail & Shop)", callback_data="adv_type_retail")],
+        [InlineKeyboardButton("🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate)", callback_data="adv_type_realestate")],
+        [InlineKeyboardButton("🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)", callback_data="adv_type_hospitality")],
+        [InlineKeyboardButton("💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)", callback_data="adv_type_services")],
+        [InlineKeyboardButton("🌱 ገና ንግድ ልጀምር ነው (Starting a New Business)", callback_data="adv_type_startup")],
+        [InlineKeyboardButton("💰 ካፒታል አለኝ — ምን ልስራ? (Investment Advice)", callback_data="adv_type_investor")],
+        [InlineKeyboardButton("🔙 ወደ ዋና ገጽ ይመለሱ", callback_data="start_menu")]
+    ]
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(intro_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(intro_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_TYPE, business_type_label: str):
+    """Prompts the user for their current financial situation, capital, and challenges."""
+    context.user_data["advice_business_type"] = business_type_label
+    context.user_data["advice_step"] = "awaiting_situation"
+    
+    prompt_text = (
+        f"🎓 **በጣም ጥሩ! የተመረጠው ዘርፍ:** {business_type_label}\n\n"
+        "አሁን ደግሞ እንደ ኢኮኖሚ ፕሮፌሰር ትክክለኛውን የትርፍ ቀመር እንድነድፍልዎ **አሁን ያሉበትን ሁኔታ** በአጭሩ ይንገሩኝ፦\n"
+        "1️⃣ በእጅዎ ያለው ካፒታል ወይም ወርሃዊ ገቢ ስንት ነው?\n"
+        "2️⃣ ዋናው ችግርዎ ምንድን ነው? (ለምሳሌ፡ የደንበኛ እጥረት፣ የዋጋ ውድድር፣ ወይም አዲስ ገበያ ማግኘት)\n\n"
+        "✍️ *ሁኔታዎን ከታች ይጻፉ (ወይም በድምጽ Voice Note ይላኩ)...*"
+    )
+    
+    keyboard = [[InlineKeyboardButton("🔙 ዘርፍ ቀይር", callback_data="business_advice_menu")]]
+    if update.callback_query:
+        await update.callback_query.message.edit_text(prompt_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(prompt_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def generate_professor_economic_advice(update: Update, context: ContextTypes.DEFAULT_TYPE, user_situation: str):
+    """Uses Groq AI to deliver deep, practical Ethiopian market economic & profit-maximization advice."""
+    user_id = str(update.effective_user.id)
+    business_type = context.user_data.get("advice_business_type", "አጠቃላይ ንግድ (General Business)")
+    
+    await update.effective_message.reply_chat_action("typing")
+    
+    # Check if the user already owns a store on Nexa to personalize the advice
+    existing_store_info = ""
+    if supabase:
+        try:
+            s_res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("store_name, plan_tier, inventory_data").eq("owner_telegram_id", user_id).execute()
+            )
+            if s_res.data:
+                s = s_res.data[0]
+                existing_store_info = f"User already owns Nexa store '{s.get('store_name')}' (Tier {s.get('plan_tier', 1)})."
+        except Exception:
+            pass
+
+    professor_prompt = f"""
+    You are 'Prof. Nexa' (ፕሮፌሰር ኔክሳ), an elite, world-class Professor of Economics, Behavioral Finance, and Business Growth Strategist specializing in the Ethiopian economy (Addis Ababa & regional markets, ETB currency, Telebirr digital commerce, import/local supply chains, and high-margin customer acquisition).
+
+    User's Business Type: {business_type}
+    User's Current Situation & Capital/Challenges: {user_situation}
+    {existing_store_info}
+
+    Your mission:
+    1. Analyze their exact situation like a caring, brilliant Economics Professor who genuinely wants them to make maximum profit and build sustainable wealth.
+    2. Give them 3 concrete, actionable, zero-waste strategies to immediately increase their profit margin and attract high-paying Ethiopian customers without wasting money.
+    3. Show them how to make money for FREE right now using zero-capital growth hacks + Nexa AI automation (e.g., capturing every Telegram lead 24/7, upselling bundles, and earning 25% recurring commission via the Nexa Partner Affiliate program `/partner` with zero capital).
+    4. Write in eloquent, warm, inspiring, grammatically flawless Amharic (በጣም የዳበረ፣ ተግባራዊ እና አነቃቂ አማርኛ). Use clear bullet points and bold headers.
+    5. End by inviting them to ask a follow-up question about pricing, marketing, or capital allocation so they rely on Prof. Nexa as their permanent business mentor.
+    """
+
+    advice_reply = (
+        "🎓 **የፕሮፌሰር ኔክሳ ስልታዊ የኢኮኖሚ ምክር**\n\n"
+        "ይቅርታ፣ አሁን ትንተናውን ማዘጋጀት አልተቻለም። እባክዎ ሁኔታዎን በድጋሚ ይጻፉ።"
+    )
+    if async_groq_client:
+        try:
+            completion = await async_groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[{"role": "system", "content": professor_prompt}, {"role": "user", "content": user_situation}],
+                temperature=0.6,
+                max_tokens=900
+            )
+            advice_reply = completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Prof Nexa AI generation error: {e}")
+            advice_reply = f"⚠️ የAI ትንተና ስህተት አጋጥሟል: {str(e)}"
+
+    # Keep them in continuous mentoring mode so follow-up questions automatically go to Prof. Nexa
+    context.user_data["advice_step"] = "mentoring_active"
+
+    keyboard = [
+        [InlineKeyboardButton("🤖 ነጻ የ AI ሻጭ ቦት ፍጠር (/register)", callback_data="start_register")],
+        [InlineKeyboardButton("🤝 ያለ ካፒታል 25% ኮሚሽን አግኝ (/partner)", callback_data="partner_menu")],
+        [InlineKeyboardButton("🔄 አዲስ የንግድ ምክር ጠይቅ", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]
+    ]
+    await update.effective_message.reply_text(advice_reply, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Reset any sub-flows when returning to main menu
+    context.user_data.pop("advice_step", None)
+    context.user_data.pop("support_ticket_step", None)
+    context.user_data.pop("partner_setup_step", None)
+    context.user_data.pop("payment_step", None)
+
     user = update.effective_user
     user_id = user.id
     await log_visitor(user_id)
@@ -1207,30 +1329,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         f"🌟 NEXA AI BOT ENGINE 🤖\n"
         f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
-        f"💡 ለምን ክፍያ መፈጸም ይኖርብዎታል?\n"
-        f"የ 3 ቀናት ነጻ ሙከራዎ (Free Trial) ሲያልቅ ቦትዎ እንዳይዘጋ እና ወደ Elite Pro Tiers ከፍ ብለው ያልተወሰነ የ AI ሽያጭ፣ የቪዲዮ ካታሎግ እና የ VIP ሊድስ ማስተዳደር እንዲችሉ ነው።\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
-        "2️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ\n"
-        "3️⃣ /startvoice / /stopvoice - የ AI ድምጽ ስልክ ረዳት አገልግሎትን ያስጀምሩ ወይም ያቁሙ\n"
-        "4️⃣ /support - የደንበኞች ድጋፍ (Customer Support) ቲኬት ይክፈቱ\n"
-        "5️⃣ /partner - የ Nexa አጋር (Partner/Affiliate) በመሆን 1/4 (25%) ኮሚሽን ያግኙ\n"
-        "6️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
-        "7️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
-        "8️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "1️⃣ /advice - 🎓 የፕሮፌሰር ኔክሳ የኢኮኖሚ እና የትርፍ ማሳደጊያ ምክር (Prof. Nexa Business Advice)\n"
+        "2️⃣ /register - አዲስ የ AI ቦት ይፍጠሩ\n"
+        "3️⃣ /partner - የ Nexa አጋር በመሆን ያለ ካፒታል 1/4 (25%) ኮሚሽን ያግኙ\n"
+        "4️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
+        "5️⃣ /leads - የደንበኞችዎን Leads እና ስልክ ቁጥሮች ይመልከቱ\n"
+        "6️⃣ /summary - የገቢ እና የጎብኚዎች ማጠቃለያ\n"
+        "7️⃣ /setphone - የንግድ ስልክ ቁጥርዎን ያስገቡ ወይም ይቀይሩ\n"
+        "8️⃣ /support - የደንበኞች ድጋፍ (Customer Support)\n"
         "9️⃣ /pay - አባልነትዎን ያሻሽሉ"
     )
     
     keyboard = [
+        [InlineKeyboardButton("🎓 የፕሮፌሰር የንግድ እና ኢኮኖሚ ምክር (Prof. Business Advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")],
         [InlineKeyboardButton("🚀 ፕሮ አባልነት ይክፈቱ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
-        [InlineKeyboardButton("📞 የንግድ ስልክ ቁጥር ማስተካከያ (/setphone)", callback_data="change_partner_phone")],
-        [InlineKeyboardButton("🎧 የደንበኞች ድጋፍ / Support (/support)", callback_data="support_menu")],
-        [InlineKeyboardButton("🤝 Nexa Partnership (1/4 ኮሚሽን አግኝ)", callback_data="partner_menu")],
+        [InlineKeyboardButton("🤝 Nexa Partnership (ያለ ካፒታል 25% ኮሚሽን)", callback_data="partner_menu")],
         [InlineKeyboardButton("🤖 ቦቶቼን አስተዳድር (/mybots)", callback_data="view_my_bots")],
         [InlineKeyboardButton("📋 የደንበኞች Leads (/leads)", callback_data="view_leads")],
         [InlineKeyboardButton("📊 የገቢ ማጠቃለያ (/summary)", callback_data="view_summary")],
-        [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")]
+        [InlineKeyboardButton("📞 ስልክ ቁጥር ማስተካከያ (/setphone)", callback_data="change_partner_phone"),
+         InlineKeyboardButton("🎧 ድጋፍ / Support", callback_data="support_menu")]
     ]
     await update.effective_message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1963,6 +2084,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     keyboard = [
         [InlineKeyboardButton("🚀 አባልነት አሻሽል (Upgrade / Pay)", callback_data="buy_pro")],
+        [InlineKeyboardButton("🎓 የፕሮፌሰር የንግድ ምክር (/advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
     ]
     
@@ -2257,7 +2379,7 @@ class StoreActionModel(BaseModel):
 
 @app.post("/admin/store-action")
 async def admin_store_action(data: StoreActionModel, x_admin_password: str = Header(None)):
-    """Allows the Admin HTML Dashboard to control any connected store live (Pause/Resume Voice or Delete Bot)."""
+    """Allows the Netlify Admin HTML Dashboard to control any connected store live."""
     if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
     if not supabase:
@@ -2498,7 +2620,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if query.data in ["buy_pro", "upgrade", "pay"]:
+    if query.data == "business_advice_menu":
+        await business_advice_command(update, context)
+    elif query.data.startswith("adv_type_"):
+        type_map = {
+            "adv_type_retail": "🛍️ ችርቻሮ / ሱቅ / ኢ-ኮሜርስ (Retail & E-Commerce)",
+            "adv_type_realestate": "🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate & Property)",
+            "adv_type_hospitality": "🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)",
+            "adv_type_services": "💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)",
+            "adv_type_startup": "🌱 አዲስ ንግድ ጀማሪ (New Startup Business)",
+            "adv_type_investor": "💰 ካፒታል ኢንቨስትመንት (Capital Allocation & Investment)"
+        }
+        chosen_label = type_map.get(query.data, "አጠቃላይ ንግድ")
+        await ask_business_situation(update, context, chosen_label)
+    elif query.data in ["buy_pro", "upgrade", "pay"]:
         await upgrade_command(update, context)
     elif query.data in ["upgrade_tier_1", "tier_pay_1", "tier_1"]:
         await start_tier_upgrade_flow(update, context, 1)
@@ -2724,6 +2859,16 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
+    # 1. Prof. Nexa Business & Economic Advisor Interactive Flow
+    advice_step = context.user_data.get("advice_step")
+    if advice_step == "awaiting_business_type":
+        await ask_business_situation(update, context, user_text.strip())
+        return
+    elif advice_step in ["awaiting_situation", "mentoring_active"] and not user_text.startswith("/"):
+        await generate_professor_economic_advice(update, context, user_text.strip())
+        return
+
+    # 2. Support Ticket Flow
     support_step = context.user_data.get("support_ticket_step")
     if support_step == "awaiting_ticket_message":
         ticket_msg = user_text.strip()
@@ -2768,6 +2913,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
+    # 3. Partner Setup Flow
     partner_setup_step = context.user_data.get("partner_setup_step")
     if partner_setup_step == "awaiting_telebirr":
         telebirr_phone = user_text.strip()
@@ -2804,6 +2950,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text(success_msg, parse_mode="Markdown")
         return
 
+    # 4. Payment Verification Flow
     payment_step = context.user_data.get("payment_step")
     if payment_step == "awaiting_payer_name":
         context.user_data["payer_name"] = user_text.strip()
@@ -2900,13 +3047,14 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     system_prompt = (
         "You are Nexa AI Master Assistant. Analyze user intent from Amharic/English message. "
-        "The user might be asking random questions, or might have registered a bot earlier and forgotten what to do or how to manage it. "
-        "If they are lost or asking general questions, guide them clearly on what to click or type (e.g. /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone, /startvoice, /stopvoice). "
-        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic (በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና የፊደል ስህተት የሌለበት ንጹህ አማርኛ). "
-        "Classify into: 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'voice', 'general'. "
+        "The user might be asking random questions, seeking business/economic advice, or might have registered a bot earlier and forgotten what to do. "
+        "If they ask about business growth, making money, profit, or economics, classify as 'advice'. "
+        "Otherwise guide them clearly on what to click or type (e.g. /advice, /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone). "
+        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic. "
+        "Classify into: 'advice', 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'general'. "
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
-    intent_result = {"intent": "general", "reply": "ሰላም! ቦቶቻችሁን ለማስተዳደር /mybots፣ የደንበኞች ድጋፍ ለማግኘት /support፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
+    intent_result = {"intent": "general", "reply": "ሰላም! የፕሮፌሰር ኔክሳ የንግድ እና ኢኮኖሚ ምክር ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
@@ -2920,7 +3068,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
             logger.error(f"Master message intent error: {e}")
 
     intent = intent_result.get("intent")
-    if intent == "mybots":
+    if intent == "advice":
+        await business_advice_command(update, context)
+    elif intent == "mybots":
         await my_bots_command(update, context)
     elif intent == "leads":
         await leads_command(update, context)
@@ -2939,7 +3089,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif intent == "setphone":
         await setphone_command(update, context)
     else:
-        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? ቦቶቻችሁን ለማየት /mybots ወይም ድጋፍ ለማግኘት /support ይጠቀሙ።"))
+        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? የንግድ ምክር ለማግኘት /advice ወይም ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
 
 
 @app.on_event("startup")
@@ -3379,6 +3529,7 @@ conv_handler = ConversationHandler(
 )
 
 telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("advice", business_advice_command))
 telegram_app.add_handler(CommandHandler("support", support_command))
 telegram_app.add_handler(CommandHandler("partner", partner_command))
 telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
