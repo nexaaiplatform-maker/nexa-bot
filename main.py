@@ -29,20 +29,21 @@ from telegram.ext import (
 # -------------------------------------------------------------------
 # Secure Configuration & Environment Variables (Synced with Render)
 # -------------------------------------------------------------------
-ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "adminnexa_dawitandargachew_0035484@##").strip()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9012733890:AAHzbRZiqhYKXu9b0s8I7wwMls3QbWA4Q-Q").strip()
+ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com").strip()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iyewcrbtfaswqwqxqimu.supabase.co").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_9BpdgIToqgXcifWFNFVCSg_A_DjddNS").strip()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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").strip()
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "7506853313").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "nexa_secure_random_token_9988").strip()
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
 NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
 
-TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "0965205354").strip()
-AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "013201740373300").strip()
+TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
+AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
+OCR_VISION_MODEL = os.getenv("OCR_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +59,6 @@ app.add_middleware(
         "https://nexa-bot-f5al.onrender.com",
         "http://localhost:3000",
         "http://localhost:8000",
-        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -115,7 +115,13 @@ if not async_groq_client:
     logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
 
 # Master Telegram Bot Application
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(15).write_timeout(15).build()
+telegram_app = (
+    Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(15).write_timeout(15).build()
+    if TELEGRAM_BOT_TOKEN
+    else None
+)
+if not telegram_app:
+    logger.warning("⚠️ TELEGRAM_BOT_TOKEN is missing! Master Telegram bot is disabled.")
 http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
@@ -516,7 +522,9 @@ async def admin_dashboard(pwd: str = ""):
                         }});
                         statusEl.classList.add("hidden");
                         if (credential) {{
-                            window.location.href = "/admin?pwd=" + encodeURIComponent("{ADMIN_PANEL_PASSWORD}");
+                            alert("Biometric verified! Please enter your Master Admin Password in Option 1 to complete login.");
+                            const pwdInput = document.querySelector('input[name="pwd"]');
+                            if (pwdInput) pwdInput.focus();
                         }}
                     }} catch (e) {{
                         statusEl.classList.add("hidden");
@@ -925,9 +933,11 @@ async def admin_dashboard(pwd: str = ""):
 
 
 @app.get("/admin/receipt/{file_id}")
-async def view_telegram_receipt(file_id: str, pwd: str = ""):
-    if not verify_admin_pwd(pwd):
+async def view_telegram_receipt(file_id: str, pwd: str = "", x_admin_password: str = Header(None)):
+    if not verify_admin_pwd(pwd, x_admin_password):
         raise HTTPException(status_code=403, detail="Unauthorized")
+    if not http_client or not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Telegram client unavailable")
     file_resp = await http_client.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}")
     file_path = file_resp.json().get("result", {}).get("file_path")
     if not file_path:
@@ -2155,11 +2165,35 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 # -------------------------------------------------------------------
 # Phone Number & AI Voice Control Commands
 # -------------------------------------------------------------------
+async def select_phone_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return CHANGE_PHONE
+    await query.answer()
+    bot_token = query.data.replace("change_phone_bot_", "", 1)
+    context.user_data["target_bot_token_for_phone"] = bot_token
+    store_label = "Selected Store"
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("store_name").eq("bot_token", bot_token).limit(1).execute()
+            )
+            if res.data:
+                store_label = res.data[0].get("store_name", store_label)
+        except Exception as e:
+            logger.error(f"Store lookup for phone change error: {e}")
+    await query.message.reply_text(
+        f"📞 እባክዎ ለ **{store_label}** አዲስ የንግድ ስልክ ቁጥር (`09...` ወይም `07...`) ያስገቡ:",
+        parse_mode="Markdown"
+    )
+    return CHANGE_PHONE
+
+
 async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
     if not supabase:
         await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
-        return
+        return ConversationHandler.END
 
     try:
         res = await asyncio.to_thread(
@@ -2167,7 +2201,7 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if not res.data:
             await update.effective_message.reply_text("❌ እስካሁን የተመዘገበ ቦት የለዎትም። ለመፍጠር /register ይጠቀሙ።")
-            return
+            return ConversationHandler.END
 
         if len(res.data) == 1:
             context.user_data["target_bot_token_for_phone"] = res.data[0]["bot_token"]
@@ -2186,28 +2220,9 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
+            return CHANGE_PHONE
     except Exception as e:
         await update.effective_message.reply_text(f"ስልክ ቁጥር ማምጣት አልተቻለም: {str(e)}")
-
-
-async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone_input = update.effective_message.text.strip()
-
-    if not re.match(r"^0[79]\d{8}$", phone_input.replace(" ", "")):
-        await update.effective_message.reply_text("⚠️ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር አይደለም። እባክዎ በ 09 ወይም በ 07 የሚጀምር 10 አሃዝ ቁጥር ይጻፉ:")
-        return CHANGE_PHONE
-
-    bot_token = context.user_data.get("target_bot_token_for_phone")
-    if not bot_token and supabase:
-        owner_id = str(update.effective_user.id)
-        res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("bot_token").eq("owner_telegram_id", owner_id).order("created_at", desc=True).limit(1).execute()
-        )
-        if res.data:
-            bot_token = res.data[0]["bot_token"]
-
-    if not bot_token:
-        await update.effective_message.reply_text("❌ የተሳሳተ ሂደት። እባክዎ /setphone በመጠቀም እንደገና ይሞክሩ።")
         return ConversationHandler.END
 
     if supabase:
@@ -2788,7 +2803,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}}'
             )
             response = await async_groq_client.chat.completions.create(
-                model="qwen/qwen3.8-27b",
+                model=OCR_VISION_MODEL,
                 response_format={"type": "json_object"},
                 messages=[{
                     "role": "user",
@@ -3158,16 +3173,21 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 async def startup_event():
     global http_client
     http_client = httpx.AsyncClient(timeout=15.0)
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
+    if telegram_app:
+        await telegram_app.initialize()
+        await telegram_app.start()
+        if RENDER_EXTERNAL_URL and TELEGRAM_WEBHOOK_SECRET:
+            await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
+        elif RENDER_EXTERNAL_URL:
+            await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook")
 
     asyncio.create_task(run_ai_system_audit_and_heal())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await telegram_app.stop()
+    if telegram_app:
+        await telegram_app.stop()
     if http_client:
         await http_client.aclose()
 
@@ -3175,6 +3195,8 @@ async def shutdown_event():
 @app.post("/webhook")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str = Header(None)):
     """Enforces strict Telegram Webhook Secret verification to block unauthorized webhook spoofing."""
+    if not telegram_app:
+        raise HTTPException(status_code=503, detail="Master Telegram bot not configured")
     if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
         logger.warning("⚠️ Blocked unauthorized Telegram webhook call with invalid secret token!")
         raise HTTPException(status_code=403, detail="Invalid Telegram Webhook Secret Token")
@@ -3585,28 +3607,32 @@ conv_handler = ConversationHandler(
         INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
         BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
         STORE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_phone)],
-        CHANGE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_updated_phone)],
+        CHANGE_PHONE: [
+            CallbackQueryHandler(select_phone_bot_callback, pattern="^change_phone_bot_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_updated_phone)
+        ],
     },
     fallbacks=[CommandHandler("cancel", cancel_registration)],
 )
 
-telegram_app.add_handler(CommandHandler("start", start_command))
-telegram_app.add_handler(CommandHandler("advice", business_advice_command))
-telegram_app.add_handler(CommandHandler("support", support_command))
-telegram_app.add_handler(CommandHandler("partner", partner_command))
-telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
-telegram_app.add_handler(CommandHandler("pay", upgrade_command))
-telegram_app.add_handler(CommandHandler("leads", leads_command))
-telegram_app.add_handler(CommandHandler("update", update_command))
-telegram_app.add_handler(CommandHandler("audit", audit_command))
-telegram_app.add_handler(CommandHandler("summary", summary_command))
-telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
-telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
-telegram_app.add_handler(CommandHandler("stopvoice", stop_voice_command))
-telegram_app.add_handler(CommandHandler("startvoice", start_voice_command))
-telegram_app.add_handler(conv_handler)
-telegram_app.add_handler(CallbackQueryHandler(button_handler))
-telegram_app.add_handler(MessageHandler((filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
-telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
-telegram_app.add_handler(MessageHandler(filters.VOICE, handle_master_voice))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
+if telegram_app:
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("advice", business_advice_command))
+    telegram_app.add_handler(CommandHandler("support", support_command))
+    telegram_app.add_handler(CommandHandler("partner", partner_command))
+    telegram_app.add_handler(CommandHandler("upgrade", upgrade_command))
+    telegram_app.add_handler(CommandHandler("pay", upgrade_command))
+    telegram_app.add_handler(CommandHandler("leads", leads_command))
+    telegram_app.add_handler(CommandHandler("update", update_command))
+    telegram_app.add_handler(CommandHandler("audit", audit_command))
+    telegram_app.add_handler(CommandHandler("summary", summary_command))
+    telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
+    telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
+    telegram_app.add_handler(CommandHandler("stopvoice", stop_voice_command))
+    telegram_app.add_handler(CommandHandler("startvoice", start_voice_command))
+    telegram_app.add_handler(conv_handler)
+    telegram_app.add_handler(CallbackQueryHandler(button_handler))
+    telegram_app.add_handler(MessageHandler((filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
+    telegram_app.add_handler(MessageHandler(filters.VOICE, handle_master_voice))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
