@@ -14,7 +14,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
-from groq import AsyncGroq
+from google import genai
+from google.genai import types
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -35,6 +36,9 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.on
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")).strip()
+GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash").strip()
+GEMINI_AUDIO_MODEL = os.getenv("GEMINI_AUDIO_MODEL", "gemini-2.5-flash").strip()
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -43,7 +47,7 @@ NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-63
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
-OCR_VISION_MODEL = os.getenv("OCR_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
+OCR_VISION_MODEL = os.getenv("OCR_VISION_MODEL", "gemini-2.5-flash").strip()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -110,9 +114,51 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and
 if not supabase:
     logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
 
-async_groq_client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-if not async_groq_client:
-    logger.warning("⚠️ GROQ_API_KEY is missing! AI features will not work.")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+if not gemini_client:
+    logger.warning("⚠️ GEMINI_API_KEY is missing! Gemini AI features will not work.")
+
+
+def _build_gemini_contents(messages: list[dict]) -> list[types.Content]:
+    """Converts chat-style role/content dictionaries into SDK types.Content objects."""
+    contents: list[types.Content] = []
+    for msg in messages:
+        role = "model" if msg.get("role") in ("assistant", "model") else "user"
+        text = str(msg.get("content") or "").strip()
+        if text:
+            contents.append(types.Content(role=role, parts=[types.Part.from_text(text=text)]))
+    return contents
+
+
+async def generate_gemini_text(
+    prompt: str,
+    system_instruction: str = None,
+    history_messages: list[dict] = None,
+    temperature: float = 0.7,
+    max_output_tokens: int = 800,
+    json_mode: bool = False,
+    model_name: str = None,
+) -> str:
+    """Runs async Gemini text or structured JSON generation via google.genai."""
+    if not gemini_client:
+        raise RuntimeError("Gemini client is not initialized")
+
+    contents: list[types.Content] = _build_gemini_contents(history_messages or [])
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        response_mime_type="application/json" if json_mode else None,
+    )
+    response = await gemini_client.aio.models.generate_content(
+        model=model_name or GEMINI_TEXT_MODEL,
+        contents=contents,
+        config=config,
+    )
+    return (response.text or "").strip()
+
 
 # Master Telegram Bot Application
 telegram_app = (
@@ -169,6 +215,113 @@ def safe_escape_html(text: str) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
         .replace("'", "&#39;")
+    )
+
+
+def normalize_phone_digits(raw_phone: str) -> str:
+    """Normalizes Ethiopian/international phone strings into comparable digits."""
+    digits = re.sub(r"\D+", "", raw_phone or "")
+    if digits.startswith("251") and len(digits) == 12:
+        return "0" + digits[3:]
+    return digits
+
+
+async def lookup_registered_phone_stores(raw_phone: str) -> list[dict]:
+    """Finds Nexa stores matching a registered business or owner phone number."""
+    if not supabase:
+        return []
+    target_norm = normalize_phone_digits(raw_phone)
+    if not target_norm:
+        return []
+
+    try:
+        res = await asyncio.to_thread(
+            lambda: supabase.table("stores").select("*").execute()
+        )
+        matched = []
+        for s in (res.data or []):
+            b_norm = normalize_phone_digits(str(s.get("business_phone") or ""))
+            o_norm = normalize_phone_digits(str(s.get("owner_phone") or ""))
+            if target_norm and (target_norm == b_norm or target_norm == o_norm):
+                matched.append(s)
+        return matched
+    except Exception as e:
+        logger.error(f"Registered phone lookup error: {e}")
+        return []
+
+
+async def answer_registered_phone_with_ai(
+    raw_phone: str,
+    user_question: str,
+    store_record: dict = None,
+    customer_lang: str = "amharic",
+    history_messages: list[dict] = None,
+) -> str:
+    """Generates an AI-powered answer for a phone number registered in Nexa."""
+    norm_phone = normalize_phone_digits(raw_phone)
+    stores = [store_record] if store_record else await lookup_registered_phone_stores(norm_phone)
+
+    if not stores:
+        return (
+            f"📞 **ስልክ ቁጥር `{raw_phone}` በ Nexa ሲስተም ውስጥ አልተመዘገበም።**\n\n"
+            f"ይህን ቁጥር በ Nexa AI ለማስመዝገብ እና 24/7 የ AI ምላሽ ለመስጠት `/register` ወይም `/setphone` ይጠቀሙ።"
+        )
+
+    store_summaries = []
+    for st in stores:
+        t_num = st.get("plan_tier", 1)
+        t_name = TIER_CONFIG.get(t_num, TIER_CONFIG[1])["name"]
+        voice_active = "ንቁ (Active)" if st.get("voice_ai_active", True) else "ተቋርጧል (Paused)"
+        store_summaries.append(
+            f"- Store Name: {st.get('store_name', 'Nexa Store')}\n"
+            f"  Registered Phone: {st.get('business_phone') or st.get('owner_phone') or norm_phone}\n"
+            f"  Plan Tier: {t_name}\n"
+            f"  Voice AI Status: {voice_active}\n"
+            f"  Catalog / Info:\n{st.get('inventory_data', 'No catalog details provided.')}"
+        )
+
+    context_block = "\n\n".join(store_summaries)
+    lang_rule = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ አማርኛ ተጠቀም።",
+        "english": "Respond clearly and helpfully in English.",
+        "oromo": "Afaan Oromootiin deebisi."
+    }.get(customer_lang, "በጣም የዳበረ እና ትክክለኛ አማርኛ ተጠቀም።")
+
+    system_prompt = f"""
+    You are Nexa AI Commerce Assistant answering a query about or through a phone number registered in Nexa ({norm_phone}).
+    Language Rule: {lang_rule}
+
+    Registered Nexa Store Data:
+    {context_block}
+
+    Instructions:
+    - Confirm clearly that this phone number is registered in Nexa AI.
+    - Answer the user's question accurately using the registered store catalog, services, pricing, and status above.
+    - If no specific question was asked beyond the phone number, give a helpful AI overview of the registered business, its offerings, and how to proceed or contact/order.
+    - Never expose private tokens or internal database IDs.
+    """
+
+    effective_prompt = user_question.strip() if user_question and user_question.strip() else (
+        f"Provide a helpful AI answer for registered phone number {norm_phone}."
+    )
+
+    if gemini_client:
+        try:
+            return await generate_gemini_text(
+                prompt=effective_prompt,
+                system_instruction=system_prompt,
+                history_messages=history_messages or [],
+                temperature=0.5,
+                max_output_tokens=650,
+            )
+        except Exception as e:
+            logger.error(f"Registered phone AI answer error: {e}")
+
+    primary = stores[0]
+    return (
+        f"🤖 **የ Nexa AI ምላሽ — ስልክ `{norm_phone}`**\n"
+        f"• የተመዘገበ መደብር: **{primary.get('store_name', 'Nexa Store')}**\n"
+        f"• ካታሎግ / መረጃ:\n{primary.get('inventory_data', 'መረጃ ተመዝግቧል።')}"
     )
 
 
@@ -261,10 +414,10 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Telegram Voice Transcription via Groq Whisper AI
+# Telegram Voice Transcription via Gemini Multimodal Audio
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    if not async_groq_client or not http_client:
+    if not gemini_client or not http_client:
         return ""
     try:
         file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
@@ -273,15 +426,17 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
             return ""
 
         audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
-        audio_data = audio_bytes_resp.content
+        audio_data = bytes(audio_bytes_resp.content)
 
-        transcription = await async_groq_client.audio.transcriptions.create(
-            file=("voice.ogg", audio_data),
-            model="whisper-large-v3",
-            prompt="Transcribe speech in Amharic, English, or Oromo accurately.",
-            response_format="text"
+        response = await gemini_client.aio.models.generate_content(
+            model=GEMINI_AUDIO_MODEL,
+            contents=[
+                types.Part.from_bytes(data=audio_data, mime_type="audio/ogg"),
+                "Transcribe this voice message accurately in Amharic, English, or Oromo. Return only the transcribed words with no extra commentary.",
+            ],
+            config=types.GenerateContentConfig(temperature=0.1),
         )
-        return transcription.strip() if isinstance(transcription, str) else str(transcription.get("text", "")).strip()
+        return (response.text or "").strip()
     except Exception as e:
         logger.error(f"Voice transcription error: {e}")
         return ""
@@ -296,9 +451,35 @@ async def root_health():
         "netlify_dashboard": NETLIFY_DASHBOARD_URL,
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
-        "groq_connected": bool(async_groq_client),
+        "gemini_connected": bool(gemini_client),
         "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
         "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET)
+    }
+
+
+@app.post("/api/phone-ai-answer")
+async def phone_ai_answer_endpoint(request: Request):
+    """Direct API endpoint returning an AI-powered answer for a phone number registered in Nexa."""
+    body = await request.json()
+    phone = str(body.get("phone") or body.get("phone_number") or "").strip()
+    question = str(body.get("question") or body.get("message") or "").strip()
+    lang = str(body.get("language") or "amharic").strip().lower()
+
+    if not phone:
+        return {"status": "error", "message": "Phone number is required"}
+
+    matched_stores = await lookup_registered_phone_stores(phone)
+    ai_answer = await answer_registered_phone_with_ai(
+        raw_phone=phone,
+        user_question=question,
+        customer_lang=lang,
+    )
+    return {
+        "status": "success",
+        "phone": normalize_phone_digits(phone),
+        "registered_in_nexa": bool(matched_stores),
+        "stores_matched": len(matched_stores),
+        "ai_answer": ai_answer,
     }
 
 
@@ -418,7 +599,7 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(pwd: str = ""):
     if not verify_admin_pwd(pwd):
-        return f"""
+        return """
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -461,76 +642,76 @@ async def admin_dashboard(pwd: str = ""):
                 </div>
             </div>
             <script>
-                window.addEventListener("DOMContentLoaded", () => {{
+                window.addEventListener("DOMContentLoaded", () => {
                     const isRegistered = localStorage.getItem("nexa_bio_registered") === "true";
-                    if (!isRegistered) {{
+                    if (!isRegistered) {
                         document.getElementById("bio-register-box").classList.remove("hidden");
-                    }} else {{
+                    } else {
                         document.getElementById("bio-login-box").classList.remove("hidden");
-                    }}
-                }});
+                    }
+                });
 
-                async function registerBiometricsFirst() {{
+                async function registerBiometricsFirst() {
                     const statusEl = document.getElementById("bio-status");
-                    try {{
-                        if (!window.PublicKeyCredential) {{
+                    try {
+                        if (!window.PublicKeyCredential) {
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }}
+                        }
                         statusEl.classList.remove("hidden");
-                        const newCredential = await navigator.credentials.create({{
-                            publicKey: {{
+                        const newCredential = await navigator.credentials.create({
+                            publicKey: {
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
-                                rp: {{ name: "Nexa AI Elite Admin" }},
-                                user: {{
+                                rp: { name: "Nexa AI Elite Admin" },
+                                user: {
                                     id: new Uint8Array([79, 115, 115, 101, 97, 114]),
                                     name: "admin@nexa.ai",
                                     displayName: "Elite Admin"
-                                }},
-                                pubKeyCredParams: [{{ alg: -7, type: "public-key" }}, {{ alg: -257, type: "public-key" }}],
-                                authenticatorSelection: {{ authenticatorAttachment: "platform", userVerification: "required" }},
+                                },
+                                pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+                                authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
                                 timeout: 60000
-                            }}
-                        }});
+                            }
+                        });
                         statusEl.classList.add("hidden");
-                        if (newCredential) {{
+                        if (newCredential) {
                             localStorage.setItem("nexa_bio_registered", "true");
                             document.getElementById("bio-register-box").classList.add("hidden");
                             document.getElementById("bio-login-box").classList.remove("hidden");
                             alert("Fingerprint registered! Click Option 2 to unlock.");
-                        }}
-                    }} catch (e) {{
+                        }
+                    } catch (e) {
                         statusEl.classList.add("hidden");
                         alert("Biometric registration failed or canceled. Use Option 1 (Password).");
-                    }}
-                }}
+                    }
+                }
 
-                async function tryBiometricLogin() {{
+                async function tryBiometricLogin() {
                     const statusEl = document.getElementById("bio-status");
-                    try {{
-                        if (!window.PublicKeyCredential) {{
+                    try {
+                        if (!window.PublicKeyCredential) {
                             alert("Biometrics / WebAuthn not supported on this browser.");
                             return;
-                        }}
+                        }
                         statusEl.classList.remove("hidden");
-                        const credential = await navigator.credentials.get({{
-                            publicKey: {{
+                        const credential = await navigator.credentials.get({
+                            publicKey: {
                                 challenge: window.crypto.getRandomValues(new Uint8Array(32)),
                                 timeout: 60000,
                                 userVerification: "required"
-                            }}
-                        }});
+                            }
+                        });
                         statusEl.classList.add("hidden");
-                        if (credential) {{
+                        if (credential) {
                             alert("Biometric verified! Please enter your Master Admin Password in Option 1 to complete login.");
                             const pwdInput = document.querySelector('input[name="pwd"]');
                             if (pwdInput) pwdInput.focus();
-                        }}
-                    }} catch (e) {{
+                        }
+                    } catch (e) {
                         statusEl.classList.add("hidden");
                         alert("Biometric verification failed or canceled. Use Option 1 (Password).");
-                    }}
-                }}
+                    }
+                }
             </script>
         </body>
         </html>
@@ -802,130 +983,130 @@ async def admin_dashboard(pwd: str = ""):
         </div>
 
         <script>
-            function openSupportModal(ticketId, userId) {{
+            function openSupportModal(ticketId, userId) {
                 document.getElementById("supportTicketId").value = ticketId;
                 document.getElementById("supportUserId").value = userId;
                 document.getElementById("supportModalSub").innerText = "Replying to User Telegram ID: " + userId;
                 document.getElementById("supportModal").classList.remove("hidden");
-            }}
+            }
 
-            function closeSupportModal() {{
+            function closeSupportModal() {
                 document.getElementById("supportModal").classList.add("hidden");
-            }}
+            }
 
-            async function submitSupportReply(e) {{
+            async function submitSupportReply(e) {
                 e.preventDefault();
                 const ticketId = document.getElementById("supportTicketId").value;
                 const userId = document.getElementById("supportUserId").value;
                 const replyText = document.getElementById("supportReplyText").value;
 
-                try {{
-                    const resp = await fetch("/admin/support-reply", {{
+                try {
+                    const resp = await fetch("/admin/support-reply", {
                         method: "POST",
-                        headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" }})
-                    }});
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" })
+                    });
                     const data = await resp.json();
-                    if (data.status === "success") {{
+                    if (data.status === "success") {
                         alert("Support reply sent successfully to customer!");
                         closeSupportModal();
                         window.location.reload();
-                    }} else {{
+                    } else {
                         alert("Error: " + (data.message || "Failed to send reply"));
-                    }}
-                }} catch (err) {{
+                    }
+                } catch (err) {
                     alert("Network error: " + err);
-                }}
-            }}
+                }
+            }
 
-            function openSyncModal(userId, storeName, currentTier) {{
+            function openSyncModal(userId, storeName, currentTier) {
                 document.getElementById("syncUserId").value = userId;
                 document.getElementById("syncTierNum").value = currentTier;
                 document.getElementById("syncModalSub").innerText = "Store: " + storeName + " (Owner ID: " + userId + ")";
                 document.getElementById("syncModal").classList.remove("hidden");
-            }}
+            }
 
-            function closeSyncModal() {{
+            function closeSyncModal() {
                 document.getElementById("syncModal").classList.add("hidden");
-            }}
+            }
 
-            async function submitSyncTier(e) {{
+            async function submitSyncTier(e) {
                 e.preventDefault();
                 const userId = document.getElementById("syncUserId").value;
                 const tier = parseInt(document.getElementById("syncTierNum").value);
                 const months = parseInt(document.getElementById("syncMonths").value);
 
-                try {{
-                    const resp = await fetch("/admin/sync-tier", {{
+                try {
+                    const resp = await fetch("/admin/sync-tier", {
                         method: "POST",
-                        headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" }})
-                    }});
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" })
+                    });
                     const data = await resp.json();
-                    if (data.status === "success") {{
+                    if (data.status === "success") {
                         alert("Successfully synced tier to Tier " + tier + " for " + months + " month(s)! Notification sent to owner.");
                         closeSyncModal();
                         window.location.reload();
-                    }} else {{
+                    } else {
                         alert("Error: " + (data.message || "Failed to sync"));
-                    }}
-                }} catch (err) {{
+                    }
+                } catch (err) {
                     alert("Network error: " + err);
-                }}
-            }}
+                }
+            }
 
-            async function sendBroadcast() {{
+            async function sendBroadcast() {
                 const msg = document.getElementById("broadcast-msg").value;
-                if (!msg) {{
+                if (!msg) {
                     alert("Please write a message first.");
                     return;
-                }}
-                try {{
-                    const resp = await fetch("/admin/broadcast", {{
+                }
+                try {
+                    const resp = await fetch("/admin/broadcast", {
                         method: "POST",
-                        headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ message: msg, pwd: "{safe_pwd}" }})
-                    }});
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: msg, pwd: "{safe_pwd}" })
+                    });
                     const data = await resp.json();
-                    if (data.status === "success") {{
+                    if (data.status === "success") {
                         alert("Broadcast successfully sent to " + data.sent + " store owners!");
                         document.getElementById("broadcast-msg").value = "";
-                    }} else {{
+                    } else {
                         alert("Error: " + (data.message || "Failed to broadcast"));
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Network error sending broadcast: " + e);
-                }}
-            }}
+                }
+            }
 
-            async function registerBiometrics() {{
-                try {{
-                    if (!window.PublicKeyCredential) {{
+            async function registerBiometrics() {
+                try {
+                    if (!window.PublicKeyCredential) {
                         alert("Biometrics not supported on this device.");
                         return;
-                    }}
-                    const newCredential = await navigator.credentials.create({{
-                        publicKey: {{
+                    }
+                    const newCredential = await navigator.credentials.create({
+                        publicKey: {
                             challenge: new Uint8Array([8,22,50,90,12,33,44,11]),
-                            rp: {{ name: "Nexa AI Elite Admin" }},
-                            user: {{
+                            rp: { name: "Nexa AI Elite Admin" },
+                            user: {
                                 id: new Uint8Array([1, 2, 3, 4]),
                                 name: "admin@nexa.ai",
                                 displayName: "Elite Admin"
-                            }},
-                            pubKeyCredParams: [ {{ alg: -7, type: "public-key" }} ],
+                            },
+                            pubKeyCredParams: [ { alg: -7, type: "public-key" } ],
                             timeout: 60000,
                             attestation: "direct"
-                        }}
-                    }});
-                    if (newCredential) {{
+                        }
+                    });
+                    if (newCredential) {
                         localStorage.setItem("nexa_bio_unlocked", "true");
                         alert("Biometric passkey registered successfully on this browser!");
-                    }}
-                }} catch (e) {{
+                    }
+                } catch (e) {
                     alert("Biometric registration failed or canceled.");
-                }}
-            }}
+                }
+            }
         </script>
     </body>
     </html>
@@ -1132,7 +1313,7 @@ async def record_affiliate_commission_and_revenue(
             elif http_client and TELEGRAM_BOT_TOKEN:
                 await http_client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode": "Markdown"}
+                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode="Markdown"}
                 )
     except Exception as e:
         logger.error(f"Affiliate revenue split calculation error: {e}")
@@ -1308,20 +1489,15 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
         "⚡ **ኔክሳ የንግድ አማካሪ**\n\n"
         "ይቅርታ፣ አሁን ምላሽ ማዘጋጀት አልተቻለም። ጥያቄዎን በድጋሚ ይጻፉልኝ — በደስታ እንቀጥላለን!"
     )
-    if async_groq_client:
+    if gemini_client:
         try:
-            messages = [{"role": "system", "content": advisor_prompt}]
-            for h in advice_history[-6:]:
-                messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
-            messages.append({"role": "user", "content": user_situation})
-
-            completion = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=messages,
+            advice_reply = await generate_gemini_text(
+                prompt=user_situation,
+                system_instruction=advisor_prompt,
+                history_messages=advice_history[-6:],
                 temperature=0.7,
-                max_tokens=900
+                max_output_tokens=900,
             )
-            advice_reply = completion.choices[0].message.content
         except Exception as e:
             logger.error(f"Nexa Elite Advisor AI generation error: {e}")
             advice_reply = f"⚠️ የAI ምላሽ ስህተት አጋጥሟል: {str(e)}"
@@ -2043,18 +2219,17 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
 
     structured_inventory = raw_input
-    if async_groq_client:
+    if gemini_client:
         try:
             prompt = (
                 f"You are an expert database and catalog structurer. Clean up, re-organize, and simplify the following raw store inventory or catalog text "
                 f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:\n\n{raw_input}"
             )
-            completion = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
+            structured_inventory = await generate_gemini_text(
+                prompt=prompt,
+                temperature=0.2,
+                max_output_tokens=1000,
             )
-            structured_inventory = completion.choices[0].message.content
         except Exception as e:
             logger.error(f"AI catalog structuring error: {e}")
 
@@ -2169,11 +2344,35 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 # -------------------------------------------------------------------
 # Phone Number & AI Voice Control Commands
 # -------------------------------------------------------------------
+async def select_phone_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return CHANGE_PHONE
+    await query.answer()
+    bot_token = query.data.replace("change_phone_bot_", "", 1)
+    context.user_data["target_bot_token_for_phone"] = bot_token
+    store_label = "Selected Store"
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("store_name").eq("bot_token", bot_token).limit(1).execute()
+            )
+            if res.data:
+                store_label = res.data[0].get("store_name", store_label)
+        except Exception as e:
+            logger.error(f"Store lookup for phone change error: {e}")
+    await query.message.reply_text(
+        f"📞 እባክዎ ለ **{store_label}** አዲስ የንግድ ስልክ ቁጥር (`09...` ወይም `07...`) ያስገቡ:",
+        parse_mode="Markdown"
+    )
+    return CHANGE_PHONE
+
+
 async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = str(update.effective_user.id)
     if not supabase:
         await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
-        return
+        return ConversationHandler.END
 
     try:
         res = await asyncio.to_thread(
@@ -2181,7 +2380,7 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if not res.data:
             await update.effective_message.reply_text("❌ እስካሁን የተመዘገበ ቦት የለዎትም። ለመፍጠር /register ይጠቀሙ።")
-            return
+            return ConversationHandler.END
 
         if len(res.data) == 1:
             context.user_data["target_bot_token_for_phone"] = res.data[0]["bot_token"]
@@ -2200,8 +2399,10 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
+            return CHANGE_PHONE
     except Exception as e:
         await update.effective_message.reply_text(f"ስልክ ቁጥር ማምጣት አልተቻለም: {str(e)}")
+        return ConversationHandler.END
 
 
 async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2232,8 +2433,13 @@ async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TY
                     "owner_phone": phone_input
                 }).eq("bot_token", bot_token).execute()
             )
+            ai_confirm = await answer_registered_phone_with_ai(
+                raw_phone=phone_input,
+                user_question="Briefly welcome this newly registered phone number in Nexa AI and explain how it gives AI-powered answers.",
+                customer_lang="amharic",
+            )
             await update.effective_message.reply_text(
-                f"✅ የስልክ ቁጥርዎ በተሳካ ሁኔታ ወደ **`{phone_input}`** ተቀይሯል!",
+                f"✅ የስልክ ቁጥርዎ በተሳካ ሁኔታ ወደ **`{phone_input}`** ተቀይሯል!\n\n{ai_confirm}",
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -2274,7 +2480,7 @@ async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         await update.effective_message.reply_text(
             "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
-            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
+            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Gemini AI በሰዓቱ በስልክ ይመልስላቸዋል።",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -2375,18 +2581,14 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     )
 
     ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
-    if async_groq_client and spoken_text:
+    if gemini_client and spoken_text:
         try:
-            completion = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": spoken_text}
-                ],
+            ai_response = await generate_gemini_text(
+                prompt=spoken_text,
+                system_instruction=system_prompt,
                 temperature=0.5,
-                max_tokens=250
+                max_output_tokens=250,
             )
-            ai_response = completion.choices[0].message.content
         except Exception as e:
             logger.error(f"Voice AI generation error: {e}")
 
@@ -2712,9 +2914,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "adv_type_realestate": "🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate & Property)",
             "adv_type_hospitality": "🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)",
             "adv_type_services": "💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)",
-            "adv_type_legal": "⚖️ የንግድ ሕጋዊነት፣ ፈቃድ እና ግብር (Business Legal & Compliance)",
+            "adv_type_legal": "⚖️ የንግድ ሕጋዊነት፣ ፈቃድ እና ግብር (Legal & Compliance)",
             "adv_type_startup": "🌱 አዲስ ንግድ ጀማሪ (New Startup Business)",
-            "adv_type_investor": "💡 የንግድ ሐሳብ እና ካፒታል አጠቃቀም (Ideas & Capital)"
+            "adv_type_investor": "💡 ሐሳብ እና ካፒታል አጠቃቀም (Ideas & Capital)"
         }
         chosen_label = type_map.get(query.data, "ሁሉም የንግድ ዘርፎች")
         await ask_business_situation(update, context, chosen_label)
@@ -2791,7 +2993,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
-    base64_image = base64.b64encode(bytes(image_bytes)).decode('utf-8')
+    _ = base64.b64encode(bytes(image_bytes)).decode('utf-8')
 
     expected_amount_str = order["amount"]
     expected_payer_name = order.get("payer_name", "")
@@ -2799,7 +3001,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None, "detected_name": None, "detected_phone": None}
 
-    if async_groq_client:
+    if gemini_client:
         try:
             prompt = (
                 f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
@@ -2810,18 +3012,18 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}}'
             )
-            response = await async_groq_client.chat.completions.create(
+            response = await gemini_client.aio.models.generate_content(
                 model=OCR_VISION_MODEL,
-                response_format={"type": "json_object"},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                }]
+                contents=[
+                    types.Part.from_bytes(data=bytes(image_bytes), mime_type="image/jpeg"),
+                    prompt,
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
             )
-            parsed_result = json.loads(response.choices[0].message.content)
+            parsed_result = json.loads(response.text or "{}")
         except Exception as e:
             logger.error(f"OCR Error: {e}")
 
@@ -3130,9 +3332,23 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if user_text.startswith("/"):
         return
 
+    # 5. Registered Phone Number AI Query Interceptor
+    phone_candidates = re.findall(r"(?:\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
+    if phone_candidates:
+        matched_stores = await lookup_registered_phone_stores(phone_candidates[0])
+        if matched_stores:
+            await update.effective_message.reply_chat_action("typing")
+            ai_phone_answer = await answer_registered_phone_with_ai(
+                raw_phone=phone_candidates[0],
+                user_question=user_text,
+                customer_lang="amharic",
+            )
+            await update.effective_message.reply_text(ai_phone_answer, parse_mode="Markdown")
+            return
+
     system_prompt = (
         "You are Nexa AI Master Assistant and Business Advisor. Analyze user intent from Amharic/English message. "
-        "The user might be asking questions about any business, legal compliance, strategy, or might have registered a bot earlier and forgotten what to do. "
+        "The user might be asking about any business, legal compliance, strategy, or might have registered a bot earlier and forgotten what to do. "
         "If they ask about business growth, making money, pricing, profit, legal/licensing/tax business practices, or business strategy, classify as 'advice'. "
         "Otherwise guide them clearly on what to click or type (e.g. /advice, /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic. "
@@ -3140,15 +3356,16 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! የንግድ እና የስትራቴጂ ምክር ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
-    if async_groq_client:
+    if gemini_client:
         try:
-            response = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                response_format={"type": "json_object"},
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
-                temperature=0.3
+            raw_intent_json = await generate_gemini_text(
+                prompt=user_text,
+                system_instruction=system_prompt,
+                temperature=0.3,
+                max_output_tokens=400,
+                json_mode=True,
             )
-            intent_result = json.loads(response.choices[0].message.content)
+            intent_result = json.loads(raw_intent_json)
         except Exception as e:
             logger.error(f"Master message intent error: {e}")
 
@@ -3201,7 +3418,10 @@ if telegram_app:
             INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inventory)],
             BOT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bot_token)],
             STORE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_store_phone)],
-            CHANGE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_updated_phone)],
+            CHANGE_PHONE: [
+                CallbackQueryHandler(select_phone_bot_callback, pattern="^change_phone_bot_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_updated_phone)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel_registration)],
     )
@@ -3361,6 +3581,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
                 logger.error(f"Visitor/Lead record error: {e}")
         task = asyncio.create_task(_record_visitor_and_lead())
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
     if user_text == "/start":
         if supabase:
             asyncio.create_task(asyncio.to_thread(lambda: supabase.table("customer_languages").upsert({
@@ -3376,14 +3597,18 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
             "minimalist": "🎯 ሰላም! በምን ልረዳዎ እችላለሁ?"
         }
 
+        registered_phone = store.get("business_phone") or store.get("owner_phone") or ""
+        phone_line = f"\n📞 የተመዘገበ የንግድ ስልክ: `{registered_phone}` (የ AI ምላሽ በቀጥታ ማግኘት ይችላሉ)" if registered_phone else ""
+
         direct_welcome = (
-            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!\n\n"
+            f"{theme_intros.get(ui_theme, 'ሰላም!')} እንኳን ወደ **{store.get('store_name')}** በደህና መጡ!{phone_line}\n\n"
             f"እቃዎቻችንን፣ ዋጋዎቻችንን ወይም አገልግሎቶቻችንን ከታች በመጻፍ ወይም በድምጽ (Voice Note) መጠየቅ ይችላሉ። ፎቶ ወይም ቪዲዮ ማየት ከፈለጉ መጠየቅ ይችላሉ!"
         )
         if http_client:
             await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": direct_welcome
+                "text": direct_welcome,
+                "parse_mode": "Markdown"
             })
         return {"ok": True}
 
@@ -3412,7 +3637,8 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "store_name": store.get("store_name", "Our Business"), "inventory_data": store.get("inventory_data", ""),
         "owner_telegram_id": store.get("owner_telegram_id"), "customer_lang": customer_lang,
         "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages,
-        "available_tags": available_tags, "plan_tier": store.get("plan_tier", 1)
+        "available_tags": available_tags, "plan_tier": store.get("plan_tier", 1),
+        "business_phone": store.get("business_phone") or store.get("owner_phone") or ""
     }
 
     return await store_chat_webhook(payload)
@@ -3429,7 +3655,7 @@ async def analyze_and_upsert_lead(
     history_messages: list,
     inventory_data: str
 ):
-    if not supabase or not async_groq_client:
+    if not supabase or not gemini_client:
         return
 
     convo_text = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
@@ -3455,13 +3681,13 @@ async def analyze_and_upsert_lead(
     """
 
     try:
-        res = await async_groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": analysis_prompt}],
-            temperature=0.1
+        raw_lead_json = await generate_gemini_text(
+            prompt=analysis_prompt,
+            temperature=0.1,
+            max_output_tokens=400,
+            json_mode=True,
         )
-        structured_data = json.loads(res.choices[0].message.content)
+        structured_data = json.loads(raw_lead_json)
 
         phone = structured_data.get("phone_number")
         if not phone:
@@ -3512,6 +3738,7 @@ async def store_chat_webhook(payload: dict):
     history_messages = payload.get("history_messages", [])
     available_tags = payload.get("available_tags", [])
     plan_tier = payload.get("plan_tier", 1)
+    registered_phone = payload.get("business_phone", "")
 
     if owner_telegram_id:
         try:
@@ -3533,60 +3760,74 @@ async def store_chat_webhook(payload: dict):
             json={"chat_id": chat_id, "action": "typing"}
         ))
 
-    lang_instructions = {
-        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
-        "english": "Respond in English.",
-        "oromo": "Afaan Oromootiin deebisi."
-    }
+    # Check if the user mentions a phone number registered in Nexa to provide an AI-powered answer
+    phone_matches = re.findall(r"(?:\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
+    if phone_matches and registered_phone and normalize_phone_digits(phone_matches[0]) == normalize_phone_digits(registered_phone):
+        ai_reply = await answer_registered_phone_with_ai(
+            raw_phone=phone_matches[0],
+            user_question=user_text,
+            store_record={
+                "store_name": store_name,
+                "business_phone": registered_phone,
+                "plan_tier": plan_tier,
+                "inventory_data": inventory_data,
+                "voice_ai_active": True,
+            },
+            customer_lang=customer_lang,
+            history_messages=history_messages,
+        )
+    else:
+        lang_instructions = {
+            "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
+            "english": "Respond in English.",
+            "oromo": "Afaan Oromootiin deebisi."
+        }
 
-    theme_prompts = {
-        "energetic": "Be highly energetic, exciting, friendly, and action-oriented.",
-        "friendly": "Be warm, welcoming, approachable, and helpful.",
-        "executive": "Be a professional executive VIP concierge, polished and authoritative.",
-        "sales": "Be conversion-focused, direct, highlighting value and urgency.",
-        "minimalist": "Be direct, concise, and straight to the point."
-    }
+        theme_prompts = {
+            "energetic": "Be highly energetic, exciting, friendly, and action-oriented.",
+            "friendly": "Be warm, welcoming, approachable, and helpful.",
+            "executive": "Be a professional executive VIP concierge, polished and authoritative.",
+            "sales": "Be conversion-focused, direct, highlighting value and urgency.",
+            "minimalist": "Be direct, concise, and straight to the point."
+        }
 
-    tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
-    tags_str = ", ".join(available_tags) if available_tags else "None"
+        tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+        tags_str = ", ".join(available_tags) if available_tags else "None"
+        phone_context_line = f"Registered Store Phone in Nexa: {registered_phone}" if registered_phone else "Registered Store Phone in Nexa: Not set"
 
-    system_prompt = f"""
-    You are an advanced, intelligent AI sales and analytical assistant for {store_name}.
-    Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
-    Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
-    Store Plan Tier: {tier_capabilities['name']} ({tier_capabilities['features']})
+        system_prompt = f"""
+        You are an advanced, intelligent AI sales and analytical assistant for {store_name}.
+        Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
+        Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
+        Store Plan Tier: {tier_capabilities['name']} ({tier_capabilities['features']})
+        {phone_context_line}
 
-    Core Directives & Analytical Approach:
-    - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
-    - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
-    - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
-    - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
-    - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
+        Core Directives & Analytical Approach:
+        - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
+        - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
+        - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
+        - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
+        - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
 
-    Available Media Tags: {tags_str}
+        Available Media Tags: {tags_str}
 
-    Live Store Catalog Data:
-    {inventory_data}
-    """
+        Live Store Catalog Data:
+        {inventory_data}
+        """
 
-    ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
-    if async_groq_client:
-        try:
-            messages = [{"role": "system", "content": system_prompt}]
-            for hm in history_messages:
-                messages.append({"role": hm.get("role", "user"), "content": hm.get("content", "")})
-            messages.append({"role": "user", "content": user_text})
-
-            completion = await async_groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=600
-            )
-            ai_reply = completion.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Groq Chat Error: {e}")
-            ai_reply = f"⚠️ Groq AI Error: {str(e)}"
+        ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
+        if gemini_client:
+            try:
+                ai_reply = await generate_gemini_text(
+                    prompt=user_text,
+                    system_instruction=system_prompt,
+                    history_messages=history_messages,
+                    temperature=0.7,
+                    max_output_tokens=600,
+                )
+            except Exception as e:
+                logger.error(f"Gemini Chat Error: {e}")
+                ai_reply = f"⚠️ Gemini AI Error: {str(e)}"
 
     tag_match = re.search(r"\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\]", ai_reply)
     clean_ai_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_\-]+\]", "", ai_reply).strip()
@@ -3621,6 +3862,7 @@ async def store_chat_webhook(payload: dict):
             json={"chat_id": chat_id, "text": clean_ai_reply}
         )
 
+    tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     if tag_match and supabase and http_client:
         requested_tag = tag_match.group(1).lower()
         try:
