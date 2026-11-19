@@ -14,8 +14,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
-from google import genai
-from google.genai import types
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -36,9 +34,10 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.on
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")).strip()
-GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash").strip()
-GEMINI_AUDIO_MODEL = os.getenv("GEMINI_AUDIO_MODEL", "gemini-2.5-flash").strip()
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip().rstrip("/")
+GROQ_TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_AUDIO_MODEL = os.getenv("GROQ_AUDIO_MODEL", "whisper-large-v3").strip()
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -47,7 +46,6 @@ NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-63
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
-OCR_VISION_MODEL = os.getenv("OCR_VISION_MODEL", "gemini-2.5-flash").strip()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -114,23 +112,38 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and
 if not supabase:
     logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-if not gemini_client:
-    logger.warning("⚠️ GEMINI_API_KEY is missing! Gemini AI features will not work.")
+if not GROQ_API_KEY:
+    logger.warning("⚠️ GROQ_API_KEY is missing! Groq AI features will not work.")
 
 
-def _build_gemini_contents(messages: list[dict]) -> list[types.Content]:
-    """Converts chat-style role/content dictionaries into SDK types.Content objects."""
-    contents: list[types.Content] = []
-    for msg in messages:
-        role = "model" if msg.get("role") in ("assistant", "model") else "user"
+def _groq_headers() -> dict:
+    """Builds authorization headers for Groq API requests."""
+    return {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+    }
+
+
+def _build_groq_messages(
+    prompt: str,
+    system_instruction: str = None,
+    history_messages: list[dict] = None,
+) -> list[dict]:
+    """Converts chat-style role/content dictionaries and a prompt into Groq chat messages."""
+    messages: list[dict] = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+
+    for msg in (history_messages or []):
+        role = "assistant" if msg.get("role") in ("assistant", "model") else "user"
         text = str(msg.get("content") or "").strip()
         if text:
-            contents.append(types.Content(role=role, parts=[types.Part.from_text(text=text)]))
-    return contents
+            messages.append({"role": role, "content": text})
+
+    messages.append({"role": "user", "content": prompt})
+    return messages
 
 
-async def generate_gemini_text(
+async def generate_groq_text(
     prompt: str,
     system_instruction: str = None,
     history_messages: list[dict] = None,
@@ -139,25 +152,47 @@ async def generate_gemini_text(
     json_mode: bool = False,
     model_name: str = None,
 ) -> str:
-    """Runs async Gemini text or structured JSON generation via google.genai."""
-    if not gemini_client:
-        raise RuntimeError("Gemini client is not initialized")
+    """Runs async Groq text or structured JSON generation via Groq Chat Completions API."""
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured")
 
-    contents: list[types.Content] = _build_gemini_contents(history_messages or [])
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        owns_client = True
 
-    config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-        response_mime_type="application/json" if json_mode else None,
-    )
-    response = await gemini_client.aio.models.generate_content(
-        model=model_name or GEMINI_TEXT_MODEL,
-        contents=contents,
-        config=config,
-    )
-    return (response.text or "").strip()
+    try:
+        payload: dict = {
+            "model": model_name or GROQ_TEXT_MODEL,
+            "messages": _build_groq_messages(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                history_messages=history_messages,
+            ),
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        headers = {
+            **_groq_headers(),
+            "Content-Type": "application/json",
+        }
+        resp = await client.post(
+            f"{GROQ_BASE_URL}/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices") or []
+        content = choices[0].get("message", {}).get("content", "") if choices else ""
+        return str(content or "").strip()
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 # Master Telegram Bot Application
@@ -257,7 +292,7 @@ async def answer_registered_phone_with_ai(
     customer_lang: str = "amharic",
     history_messages: list[dict] = None,
 ) -> str:
-    """Generates an AI-powered answer for a phone number registered in Nexa."""
+    """Generates an AI-powered answer via Groq for a phone number registered in Nexa."""
     norm_phone = normalize_phone_digits(raw_phone)
     stores = [store_record] if store_record else await lookup_registered_phone_stores(norm_phone)
 
@@ -305,9 +340,9 @@ async def answer_registered_phone_with_ai(
         f"Provide a helpful AI answer for registered phone number {norm_phone}."
     )
 
-    if gemini_client:
+    if GROQ_API_KEY:
         try:
-            return await generate_gemini_text(
+            return await generate_groq_text(
                 prompt=effective_prompt,
                 system_instruction=system_prompt,
                 history_messages=history_messages or [],
@@ -414,10 +449,10 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Telegram Voice Transcription via Gemini Multimodal Audio
+# Telegram Voice Transcription via Groq Audio API
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    if not gemini_client or not http_client:
+    if not GROQ_API_KEY or not http_client:
         return ""
     try:
         file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
@@ -428,15 +463,17 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
         audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
         audio_data = bytes(audio_bytes_resp.content)
 
-        response = await gemini_client.aio.models.generate_content(
-            model=GEMINI_AUDIO_MODEL,
-            contents=[
-                types.Part.from_bytes(data=audio_data, mime_type="audio/ogg"),
-                "Transcribe this voice message accurately in Amharic, English, or Oromo. Return only the transcribed words with no extra commentary.",
-            ],
-            config=types.GenerateContentConfig(temperature=0.1),
+        resp = await http_client.post(
+            f"{GROQ_BASE_URL}/audio/transcriptions",
+            headers=_groq_headers(),
+            files={"file": ("voice.ogg", audio_data, "audio/ogg")},
+            data={
+                "model": GROQ_AUDIO_MODEL,
+                "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
+            },
         )
-        return (response.text or "").strip()
+        resp.raise_for_status()
+        return str(resp.json().get("text") or "").strip()
     except Exception as e:
         logger.error(f"Voice transcription error: {e}")
         return ""
@@ -451,7 +488,7 @@ async def root_health():
         "netlify_dashboard": NETLIFY_DASHBOARD_URL,
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
-        "gemini_connected": bool(gemini_client),
+        "groq_connected": bool(GROQ_API_KEY),
         "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
         "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET)
     }
@@ -857,7 +894,7 @@ async def admin_dashboard(pwd: str = ""):
                 <h1 class="text-xl font-black tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">NEXA ELITE ADMIN</h1>
             </div>
             <div class="flex items-center gap-4">
-                <a href="{{safe_escape_html(NETLIFY_DASHBOARD_URL)}}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
+                <a href="{safe_escape_html(NETLIFY_DASHBOARD_URL)}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
                 <button onclick="registerBiometrics()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition border border-slate-700">🧬 Enable Biometrics</button>
                 <a href="/admin" class="bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 px-4 py-2 rounded-xl text-xs font-semibold transition">Lock Session</a>
             </div>
@@ -880,7 +917,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">User Telegram ID</th><th class="p-4">User Inquiry / Ticket</th><th class="p-4">Admin Reply</th><th class="p-4">Status</th><th class="p-4">Action</th>
                         </tr>
-                        {{tickets_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No support tickets submitted yet.</td></tr>'}}
+                        {tickets_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No support tickets submitted yet.</td></tr>'}
                     </table>
                 </div>
             </section>
@@ -892,7 +929,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Partner Name</th><th class="p-4">Telebirr Account</th><th class="p-4">Referral Link Code</th><th class="p-4">Total Subscriptions</th><th class="p-4">Commission Earned (1/4)</th>
                         </tr>
-                        {{partners_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No registered partners yet.</td></tr>'}}
+                        {partners_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No registered partners yet.</td></tr>'}
                     </table>
                 </div>
             </section>
@@ -904,7 +941,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Customer</th><th class="p-4">Tier</th><th class="p-4">Amount Comparison</th><th class="p-4">Reference ID</th><th class="p-4">Screenshot</th><th class="p-4">Status</th><th class="p-4">Action</th>
                         </tr>
-                        {{reviews_html or '<tr><td colspan="7" class="p-8 text-center text-slate-500">No pending payment reviews.</td></tr>'}}
+                        {reviews_html or '<tr><td colspan="7" class="p-8 text-center text-slate-500">No pending payment reviews.</td></tr>'}
                     </table>
                 </div>
             </section>
@@ -916,7 +953,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Store Name</th><th class="p-4">Bot Token Snippet</th><th class="p-4">Tier & Theme</th><th class="p-4">Owner Telegram ID</th><th class="p-4">Subscription Status</th><th class="p-4">Action</th>
                         </tr>
-                        {{stores_html or '<tr><td colspan="6" class="p-8 text-center text-slate-500">No connected stores found.</td></tr>'}}
+                        {stores_html or '<tr><td colspan="6" class="p-8 text-center text-slate-500">No connected stores found.</td></tr>'}
                     </table>
                 </div>
             </section>
@@ -928,7 +965,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Customer Name</th><th class="p-4">Phone Number</th><th class="p-4">Inquiry / Summary</th><th class="p-4">Telegram Chat ID</th>
                         </tr>
-                        {{leads_html or '<tr><td colspan="4" class="p-8 text-center text-slate-500">No customer questions recorded yet.</td></tr>'}}
+                        {leads_html or '<tr><td colspan="4" class="p-8 text-center text-slate-500">No customer questions recorded yet.</td></tr>'}
                     </table>
                 </div>
             </section>
@@ -1313,7 +1350,7 @@ async def record_affiliate_commission_and_revenue(
             elif http_client and TELEGRAM_BOT_TOKEN:
                 await http_client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode": "Markdown"}
+                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode="Markdown"}
                 )
     except Exception as e:
         logger.error(f"Affiliate revenue split calculation error: {e}")
@@ -1489,9 +1526,9 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
         "⚡ **ኔክሳ የንግድ አማካሪ**\n\n"
         "ይቅርታ፣ አሁን ምላሽ ማዘጋጀት አልተቻለም። ጥያቄዎን በድጋሚ ይጻፉልኝ — በደስታ እንቀጥላለን!"
     )
-    if gemini_client:
+    if GROQ_API_KEY:
         try:
-            advice_reply = await generate_gemini_text(
+            advice_reply = await generate_groq_text(
                 prompt=user_situation,
                 system_instruction=advisor_prompt,
                 history_messages=advice_history[-6:],
@@ -2216,16 +2253,16 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_input = update.effective_message.text
 
-    await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
+    await update.effective_message.reply_text("🔄 Groq AI is analyzing, sorting, and formatting your catalog data for Supabase...")
 
     structured_inventory = raw_input
-    if gemini_client:
+    if GROQ_API_KEY:
         try:
             prompt = (
                 f"You are an expert database and catalog structurer. Clean up, re-organize, and simplify the following raw store inventory or catalog text "
                 f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:\n\n{raw_input}"
             )
-            structured_inventory = await generate_gemini_text(
+            structured_inventory = await generate_groq_text(
                 prompt=prompt,
                 temperature=0.2,
                 max_output_tokens=1000,
@@ -2235,7 +2272,7 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["inventory_data"] = structured_inventory
     await update.effective_message.reply_text(
-        "✅ Catalog successfully sorted and structured by AI!\n\n"
+        "✅ Catalog successfully sorted and structured by Groq AI!\n\n"
         "እርምጃ 6 ከ 6: እባክዎ ከ @BotFather የወሰዱትን ልዩ የቦት ቶከን (Bot Token) እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -2480,7 +2517,7 @@ async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         await update.effective_message.reply_text(
             "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
-            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Gemini AI በሰዓቱ በስልክ ይመልስላቸዋል።",
+            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -2581,9 +2618,9 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     )
 
     ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
-    if gemini_client and spoken_text:
+    if GROQ_API_KEY and spoken_text:
         try:
-            ai_response = await generate_gemini_text(
+            ai_response = await generate_groq_text(
                 prompt=spoken_text,
                 system_instruction=system_prompt,
                 temperature=0.5,
@@ -2993,7 +3030,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
-    _ = base64.b64encode(bytes(image_bytes)).decode('utf-8')
+    b64_image = base64.b64encode(bytes(image_bytes)).decode("utf-8")
 
     expected_amount_str = order["amount"]
     expected_payer_name = order.get("payer_name", "")
@@ -3001,7 +3038,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None, "detected_name": None, "detected_phone": None}
 
-    if gemini_client:
+    if GROQ_API_KEY and http_client:
         try:
             prompt = (
                 f"Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
@@ -3012,18 +3049,39 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Return strictly valid JSON format: "
                 f'{{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}}'
             )
-            response = await gemini_client.aio.models.generate_content(
-                model=OCR_VISION_MODEL,
-                contents=[
-                    types.Part.from_bytes(data=bytes(image_bytes), mime_type="image/jpeg"),
-                    prompt,
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                ),
+            vision_resp = await http_client.post(
+                f"{GROQ_BASE_URL}/chat/completions",
+                headers={
+                    **_groq_headers(),
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_VISION_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
+                                },
+                            ],
+                        }
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                    "max_tokens": 500,
+                },
             )
-            parsed_result = json.loads(response.text or "{}")
+            vision_resp.raise_for_status()
+            vision_text = (
+                vision_resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "{}")
+            )
+            parsed_result = json.loads(vision_text or "{}")
         except Exception as e:
             logger.error(f"OCR Error: {e}")
 
@@ -3356,9 +3414,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! የንግድ እና የስትራቴጂ ምክር ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
-    if gemini_client:
+    if GROQ_API_KEY:
         try:
-            raw_intent_json = await generate_gemini_text(
+            raw_intent_json = await generate_groq_text(
                 prompt=user_text,
                 system_instruction=system_prompt,
                 temperature=0.3,
@@ -3655,7 +3713,7 @@ async def analyze_and_upsert_lead(
     history_messages: list,
     inventory_data: str
 ):
-    if not supabase or not gemini_client:
+    if not supabase or not GROQ_API_KEY:
         return
 
     convo_text = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
@@ -3681,7 +3739,7 @@ async def analyze_and_upsert_lead(
     """
 
     try:
-        raw_lead_json = await generate_gemini_text(
+        raw_lead_json = await generate_groq_text(
             prompt=analysis_prompt,
             temperature=0.1,
             max_output_tokens=400,
@@ -3816,9 +3874,9 @@ async def store_chat_webhook(payload: dict):
         """
 
         ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
-        if gemini_client:
+        if GROQ_API_KEY:
             try:
-                ai_reply = await generate_gemini_text(
+                ai_reply = await generate_groq_text(
                     prompt=user_text,
                     system_instruction=system_prompt,
                     history_messages=history_messages,
@@ -3826,8 +3884,8 @@ async def store_chat_webhook(payload: dict):
                     max_output_tokens=600,
                 )
             except Exception as e:
-                logger.error(f"Gemini Chat Error: {e}")
-                ai_reply = f"⚠️ Gemini AI Error: {str(e)}"
+                logger.error(f"Groq Chat Error: {e}")
+                ai_reply = f"⚠️ Groq AI Error: {str(e)}"
 
     tag_match = re.search(r"\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\]", ai_reply)
     clean_ai_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_\-]+\]", "", ai_reply).strip()
