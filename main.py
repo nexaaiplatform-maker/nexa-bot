@@ -9,8 +9,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Form, Header
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, HTTPException, Form, Header, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -358,6 +358,223 @@ async def answer_registered_phone_with_ai(
         f"• የተመዘገበ መደብር: **{primary.get('store_name', 'Nexa Store')}**\n"
         f"• ካታሎግ / መረጃ:\n{primary.get('inventory_data', 'መረጃ ተመዝግቧል።')}"
     )
+
+
+# -------------------------------------------------------------------
+# Live Call Session, STT & TTS Helpers for Tier 4 Phone AI
+# -------------------------------------------------------------------
+class CallSession:
+    def __init__(self, stream_sid: str = "", store: dict = None):
+        self.stream_sid = stream_sid
+        self.store = store or {}
+        self.caller_phone = ""
+        self.messages: list[dict] = []
+        self.audio_chunks: list[bytes] = []
+        self.busy = False
+
+
+async def transcribe_call_audio_groq(audio_bytes: bytes, filename: str = "call_audio.wav", mime_type: str = "audio/wav") -> str:
+    """Transcribes caller audio bytes via Groq's audio transcriptions endpoint."""
+    if not GROQ_API_KEY or not audio_bytes:
+        return ""
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        owns_client = True
+
+    try:
+        resp = await client.post(
+            f"{GROQ_BASE_URL}/audio/transcriptions",
+            headers=_groq_headers(),
+            files={"file": (filename, audio_bytes, mime_type)},
+            data={
+                "model": GROQ_AUDIO_MODEL,
+                "prompt": "Transcribe this phone call accurately in Amharic, English, or Oromo.",
+            },
+        )
+        resp.raise_for_status()
+        return str(resp.json().get("text") or "").strip()
+    except Exception as e:
+        logger.error(f"Live call transcription error: {e}")
+        return ""
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def generate_live_call_reply(session: CallSession, spoken_text: str) -> str:
+    """Generates a concise, phone-friendly AI reply using the store's catalog and Groq."""
+    store = session.store or {}
+    store_name = store.get("store_name", "Nexa Store")
+    inventory = store.get("inventory_data", "")
+    system_prompt = (
+        f"You are the AI Voice Receptionist for {store_name}. "
+        "Your answer will be spoken aloud on a live phone call. Keep replies clear, polite, "
+        "concise (2-3 sentences max), and grounded in the store catalog below.\n\n"
+        f"Catalog:\n{inventory}"
+    )
+    if not GROQ_API_KEY:
+        return "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
+
+    try:
+        reply = await generate_groq_text(
+            prompt=spoken_text,
+            system_instruction=system_prompt,
+            history_messages=session.messages[-6:],
+            temperature=0.5,
+            max_output_tokens=220,
+        )
+        session.messages.append({"role": "user", "content": spoken_text})
+        session.messages.append({"role": "assistant", "content": reply})
+        session.messages = session.messages[-8:]
+        return reply
+    except Exception as e:
+        logger.error(f"Live call Groq reply error: {e}")
+        return "ይቅርታ፣ አሁን መልስ ማዘጋጀት አልተቻለም። እባክዎ እንደገና ይሞክሩ።"
+
+
+async def synthesize_call_speech_bytes(reply_text: str) -> bytes:
+    """Hook for converting AI reply text into telephony audio bytes (WAV/PCM/mu-law)."""
+    # Plug in your TTS provider (such as ElevenLabs, Azure Speech, Google TTS, or self-hosted TTS)
+    # and return raw audio bytes matching your telephony stream format.
+    return b""
+
+
+def _build_incoming_call_xml(stream_url: str, greeting_text: str) -> str:
+    safe_greeting = safe_escape_html(greeting_text)
+    safe_stream_url = safe_escape_html(stream_url)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<Response>\n"
+        f"  <Say>{safe_greeting}</Say>\n"
+        "  <Connect>\n"
+        f'    <Stream url="{safe_stream_url}" />\n'
+        "  </Connect>\n"
+        "</Response>"
+    )
+
+
+async def _get_voice_enabled_store(bot_token: str) -> tuple[dict | None, str | None]:
+    """Fetches a store by bot_token and verifies Tier 4 and active Voice AI status."""
+    store = None
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("bot_token", bot_token).limit(1).execute()
+            )
+            if res.data:
+                store = res.data[0]
+        except Exception as e:
+            logger.error(f"Voice store lookup error: {e}")
+
+    if not store:
+        return None, "Store not found"
+    if store.get("voice_ai_active") is False:
+        return None, "AI Voice concierge is currently stopped by store owner"
+    if int(store.get("plan_tier") or 1) < 4:
+        return None, "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"
+    return store, None
+
+
+async def _log_phone_call_lead(bot_token: str, caller_phone: str, summary_text: str):
+    """Records a live voice call interaction in the store's leads table."""
+    if not supabase or not caller_phone:
+        return
+    try:
+        clean_phone = str(caller_phone).strip()
+        await asyncio.to_thread(
+            lambda: supabase.table("leads").upsert({
+                "bot_token": bot_token,
+                "visitor_telegram_id": f"phone_{clean_phone}",
+                "visitor_name": f"Phone Caller ({clean_phone})",
+                "phone_number": clean_phone,
+                "interest_summary": f"[LIVE VOICE CALL] {str(summary_text or '')[:120]}",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }, on_conflict="bot_token,visitor_telegram_id").execute()
+        )
+    except Exception as e:
+        logger.error(f"Live voice call lead logging error: {e}")
+
+
+@app.post("/api/voice-call-incoming/{bot_token}")
+async def ai_voice_call_incoming(bot_token: str, request: Request):
+    """Returns TwiML XML with bidirectional media stream URL for live Tier 4 phone calls."""
+    store, err_reason = await _get_voice_enabled_store(bot_token)
+    if not store:
+        safe_msg = safe_escape_html(err_reason or "Voice AI unavailable")
+        return Response(
+            content=f'<?xml version="1.0" encoding="UTF-8"?><Response><Say>{safe_msg}</Say><Hangup/></Response>',
+            media_type="application/xml"
+        )
+
+    ws_base = RENDER_EXTERNAL_URL.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+    stream_url = f"{ws_base}/api/voice-call-stream/{bot_token}"
+    store_name = store.get("store_name", "Nexa Store")
+    greeting = f"ሰላም! ወደ {store_name} የ AI ስልክ ረዳት በደህና መጡ። በምን ልረዳዎ እችላለሁ?"
+    xml_body = _build_incoming_call_xml(stream_url=stream_url, greeting_text=greeting)
+    return Response(content=xml_body, media_type="application/xml")
+
+
+@app.websocket("/api/voice-call-stream/{bot_token}")
+async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
+    """Handles live media stream chunks from telephony providers, runs Groq STT + LLM, and streams TTS audio back."""
+    await websocket.accept()
+    store, err_reason = await _get_voice_enabled_store(bot_token)
+    if not store:
+        await websocket.send_json({"event": "error", "message": err_reason or "Voice AI unavailable"})
+        await websocket.close(code=1008)
+        return
+
+    session = CallSession(stream_sid="", store=store)
+
+    try:
+        while True:
+            raw_msg = await websocket.receive_text()
+            event_data = json.loads(raw_msg)
+            event_type = event_data.get("event")
+
+            if event_type == "start":
+                start_meta = event_data.get("start") or {}
+                session.stream_sid = str(start_meta.get("streamSid") or "")
+                session.caller_phone = str(start_meta.get("from") or start_meta.get("caller_phone") or "Unknown Caller")
+            elif event_type == "media":
+                media_payload = event_data.get("media") or {}
+                b64_chunk = media_payload.get("payload")
+                if b64_chunk:
+                    try:
+                        session.audio_chunks.append(base64.b64decode(b64_chunk))
+                    except Exception:
+                        pass
+            elif event_type in ("utterance_end", "mark", "stop"):
+                if session.audio_chunks and not session.busy:
+                    session.busy = True
+                    try:
+                        combined_audio = b"".join(session.audio_chunks)
+                        session.audio_chunks.clear()
+                        spoken_text = await transcribe_call_audio_groq(combined_audio)
+                        if spoken_text:
+                            reply_text = await generate_live_call_reply(session, spoken_text)
+                            tts_bytes = await synthesize_call_speech_bytes(reply_text)
+                            await _log_phone_call_lead(bot_token, session.caller_phone, f"{spoken_text} -> {reply_text}")
+                            out_payload = {
+                                "event": "ai_reply",
+                                "streamSid": session.stream_sid,
+                                "transcript": spoken_text,
+                                "reply_text": reply_text,
+                            }
+                            if tts_bytes:
+                                out_payload["audio_base64"] = base64.b64encode(tts_bytes).decode("utf-8")
+                            await websocket.send_json(out_payload)
+                    finally:
+                        session.busy = False
+                if event_type == "stop":
+                    break
+    except WebSocketDisconnect:
+        logger.info(f"Live voice call stream disconnected for bot {bot_token[:8]}...")
+    except Exception as e:
+        logger.error(f"Live voice call stream error: {e}")
 
 
 # -------------------------------------------------------------------
@@ -2588,24 +2805,10 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
     spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
 
-    store = None
-    if supabase:
-        try:
-            res = await asyncio.to_thread(lambda: supabase.table("stores").select("*").eq("bot_token", bot_token).execute())
-            if res.data:
-                store = res.data[0]
-        except Exception as e:
-            logger.error(f"Voice webhook store fetch error: {e}")
-
+    store, err_reason = await _get_voice_enabled_store(bot_token)
     if not store:
-        return {"status": "error", "message": "Store not found"}
-
-    if store.get("voice_ai_active") is False:
-        return {"status": "paused", "message": "AI Voice concierge is currently stopped by store owner"}
-
-    plan_tier = store.get("plan_tier", 1)
-    if plan_tier < 4:
-        return {"status": "unauthorized", "message": "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"}
+        status_code = "not_found" if err_reason == "Store not found" else ("paused" if "stopped" in (err_reason or "") else "unauthorized")
+        return {"status": status_code, "message": err_reason}
 
     inventory = store.get("inventory_data", "")
     store_name = store.get("store_name", "Nexa Store")
@@ -2629,20 +2832,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
         except Exception as e:
             logger.error(f"Voice AI generation error: {e}")
 
-    if supabase and caller_phone:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("leads").upsert({
-                    "bot_token": bot_token,
-                    "visitor_telegram_id": f"phone_{caller_phone}",
-                    "visitor_name": f"Phone Caller ({caller_phone})",
-                    "phone_number": caller_phone,
-                    "interest_summary": f"[PHONE CALL] {spoken_text[:100]}",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }, on_conflict="bot_token,visitor_telegram_id").execute()
-            )
-        except Exception as lead_err:
-            logger.error(f"Phone lead log error: {lead_err}")
+    await _log_phone_call_lead(bot_token, caller_phone, spoken_text)
 
     return {
         "status": "success",
