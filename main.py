@@ -2567,22 +2567,23 @@ async def sync_tier(data: TierSyncModel, x_admin_password: str = Header(None)):
             return {"status": "error", "message": str(e)}
 
     try:
-        tier_name = TIER_CONFIG.get(tier, TIER_CONFIG[1])["name"]
+        tier_name = TIER_CONFIG.get(tier, TIER_CONFIG[1])["name"] if tier > 0 else "Free Tier (Level 0)"
         alert_text = (
             f"⚡ **የአካውንትዎ Tier እና የቆይታ ጊዜ በአስተዳዳሪው ተሻሽሏል!**\n\n"
-            f"• አዲስ ዕቅድ: **{tier_name}**\n"
+            f"• አዲስ ዕቅድ: **{tier_name} (Level {tier})**\n"
             f"• የቆይታ ጊዜ: **{months} ወር(ዎች)**\n"
             f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n\n"
-            f"🚀 አሁን ሁሉም የ Elite ሱቅ እና የ AI ድምጽ ረዳት አገልግሎቶች ሙሉ በሙሉ በሥራ ላይ ውለዋል!"
+            f"🚀 አሁን የ Nexa AI አገልግሎቶች በአዲሱ ደረጃ በሥራ ላይ ውለዋል!"
         )
-        await http_client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": int(user_id_str),
-                "text": alert_text,
-                "parse_mode": "Markdown"
-            }
-        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": int(user_id_str),
+                    "text": alert_text,
+                    "parse_mode": "Markdown"
+                }
+            )
     except Exception as tg_err:
         logger.error(f"Tier sync Telegram notification error: {tg_err}")
 
