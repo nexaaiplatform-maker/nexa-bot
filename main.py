@@ -1350,7 +1350,7 @@ async def record_affiliate_commission_and_revenue(
             elif http_client and TELEGRAM_BOT_TOKEN:
                 await http_client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode="Markdown"}
+                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode": "Markdown"}
                 )
     except Exception as e:
         logger.error(f"Affiliate revenue split calculation error: {e}")
