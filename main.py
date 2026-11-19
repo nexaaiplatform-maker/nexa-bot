@@ -857,7 +857,7 @@ async def admin_dashboard(pwd: str = ""):
                 <h1 class="text-xl font-black tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">NEXA ELITE ADMIN</h1>
             </div>
             <div class="flex items-center gap-4">
-                <a href="{safe_escape_html(NETLIFY_DASHBOARD_URL)}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
+                <a href="{{safe_escape_html(NETLIFY_DASHBOARD_URL)}}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
                 <button onclick="registerBiometrics()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition border border-slate-700">🧬 Enable Biometrics</button>
                 <a href="/admin" class="bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 px-4 py-2 rounded-xl text-xs font-semibold transition">Lock Session</a>
             </div>
@@ -880,7 +880,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">User Telegram ID</th><th class="p-4">User Inquiry / Ticket</th><th class="p-4">Admin Reply</th><th class="p-4">Status</th><th class="p-4">Action</th>
                         </tr>
-                        {tickets_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No support tickets submitted yet.</td></tr>'}
+                        {{tickets_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No support tickets submitted yet.</td></tr>'}}
                     </table>
                 </div>
             </section>
@@ -892,7 +892,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Partner Name</th><th class="p-4">Telebirr Account</th><th class="p-4">Referral Link Code</th><th class="p-4">Total Subscriptions</th><th class="p-4">Commission Earned (1/4)</th>
                         </tr>
-                        {partners_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No registered partners yet.</td></tr>'}
+                        {{partners_html or '<tr><td colspan="5" class="p-8 text-center text-slate-500">No registered partners yet.</td></tr>'}}
                     </table>
                 </div>
             </section>
@@ -904,7 +904,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Customer</th><th class="p-4">Tier</th><th class="p-4">Amount Comparison</th><th class="p-4">Reference ID</th><th class="p-4">Screenshot</th><th class="p-4">Status</th><th class="p-4">Action</th>
                         </tr>
-                        {reviews_html or '<tr><td colspan="7" class="p-8 text-center text-slate-500">No pending payment reviews.</td></tr>'}
+                        {{reviews_html or '<tr><td colspan="7" class="p-8 text-center text-slate-500">No pending payment reviews.</td></tr>'}}
                     </table>
                 </div>
             </section>
@@ -916,7 +916,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Store Name</th><th class="p-4">Bot Token Snippet</th><th class="p-4">Tier & Theme</th><th class="p-4">Owner Telegram ID</th><th class="p-4">Subscription Status</th><th class="p-4">Action</th>
                         </tr>
-                        {stores_html or '<tr><td colspan="6" class="p-8 text-center text-slate-500">No connected stores found.</td></tr>'}
+                        {{stores_html or '<tr><td colspan="6" class="p-8 text-center text-slate-500">No connected stores found.</td></tr>'}}
                     </table>
                 </div>
             </section>
@@ -928,7 +928,7 @@ async def admin_dashboard(pwd: str = ""):
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
                             <th class="p-4">Customer Name</th><th class="p-4">Phone Number</th><th class="p-4">Inquiry / Summary</th><th class="p-4">Telegram Chat ID</th>
                         </tr>
-                        {leads_html or '<tr><td colspan="4" class="p-8 text-center text-slate-500">No customer questions recorded yet.</td></tr>'}
+                        {{leads_html or '<tr><td colspan="4" class="p-8 text-center text-slate-500">No customer questions recorded yet.</td></tr>'}}
                     </table>
                 </div>
             </section>
@@ -983,130 +983,130 @@ async def admin_dashboard(pwd: str = ""):
         </div>
 
         <script>
-            function openSupportModal(ticketId, userId) {
+            function openSupportModal(ticketId, userId) {{
                 document.getElementById("supportTicketId").value = ticketId;
                 document.getElementById("supportUserId").value = userId;
                 document.getElementById("supportModalSub").innerText = "Replying to User Telegram ID: " + userId;
                 document.getElementById("supportModal").classList.remove("hidden");
-            }
+            }}
 
-            function closeSupportModal() {
+            function closeSupportModal() {{
                 document.getElementById("supportModal").classList.add("hidden");
-            }
+            }}
 
-            async function submitSupportReply(e) {
+            async function submitSupportReply(e) {{
                 e.preventDefault();
                 const ticketId = document.getElementById("supportTicketId").value;
                 const userId = document.getElementById("supportUserId").value;
                 const replyText = document.getElementById("supportReplyText").value;
 
-                try {
-                    const resp = await fetch("/admin/support-reply", {
+                try {{
+                    const resp = await fetch("/admin/support-reply", {{
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" })
-                    });
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" }})
+                    }});
                     const data = await resp.json();
-                    if (data.status === "success") {
+                    if (data.status === "success") {{
                         alert("Support reply sent successfully to customer!");
                         closeSupportModal();
                         window.location.reload();
-                    } else {
+                    }} else {{
                         alert("Error: " + (data.message || "Failed to send reply"));
-                    }
-                } catch (err) {
+                    }}
+                }} catch (err) {{
                     alert("Network error: " + err);
-                }
-            }
+                }}
+            }}
 
-            function openSyncModal(userId, storeName, currentTier) {
+            function openSyncModal(userId, storeName, currentTier) {{
                 document.getElementById("syncUserId").value = userId;
                 document.getElementById("syncTierNum").value = currentTier;
                 document.getElementById("syncModalSub").innerText = "Store: " + storeName + " (Owner ID: " + userId + ")";
                 document.getElementById("syncModal").classList.remove("hidden");
-            }
+            }}
 
-            function closeSyncModal() {
+            function closeSyncModal() {{
                 document.getElementById("syncModal").classList.add("hidden");
-            }
+            }}
 
-            async function submitSyncTier(e) {
+            async function submitSyncTier(e) {{
                 e.preventDefault();
                 const userId = document.getElementById("syncUserId").value;
                 const tier = parseInt(document.getElementById("syncTierNum").value);
                 const months = parseInt(document.getElementById("syncMonths").value);
 
-                try {
-                    const resp = await fetch("/admin/sync-tier", {
+                try {{
+                    const resp = await fetch("/admin/sync-tier", {{
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" })
-                    });
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" }})
+                    }});
                     const data = await resp.json();
-                    if (data.status === "success") {
+                    if (data.status === "success") {{
                         alert("Successfully synced tier to Tier " + tier + " for " + months + " month(s)! Notification sent to owner.");
                         closeSyncModal();
                         window.location.reload();
-                    } else {
+                    }} else {{
                         alert("Error: " + (data.message || "Failed to sync"));
-                    }
-                } catch (err) {
+                    }}
+                }} catch (err) {{
                     alert("Network error: " + err);
-                }
-            }
+                }}
+            }}
 
-            async function sendBroadcast() {
+            async function sendBroadcast() {{
                 const msg = document.getElementById("broadcast-msg").value;
-                if (!msg) {
+                if (!msg) {{
                     alert("Please write a message first.");
                     return;
-                }
-                try {
-                    const resp = await fetch("/admin/broadcast", {
+                }}
+                try {{
+                    const resp = await fetch("/admin/broadcast", {{
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: msg, pwd: "{safe_pwd}" })
-                    });
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ message: msg, pwd: "{safe_pwd}" }})
+                    }});
                     const data = await resp.json();
-                    if (data.status === "success") {
+                    if (data.status === "success") {{
                         alert("Broadcast successfully sent to " + data.sent + " store owners!");
                         document.getElementById("broadcast-msg").value = "";
-                    } else {
+                    }} else {{
                         alert("Error: " + (data.message || "Failed to broadcast"));
-                    }
-                } catch (e) {
+                    }}
+                }} catch (e) {{
                     alert("Network error sending broadcast: " + e);
-                }
-            }
+                }}
+            }}
 
-            async function registerBiometrics() {
-                try {
-                    if (!window.PublicKeyCredential) {
+            async function registerBiometrics() {{
+                try {{
+                    if (!window.PublicKeyCredential) {{
                         alert("Biometrics not supported on this device.");
                         return;
-                    }
-                    const newCredential = await navigator.credentials.create({
-                        publicKey: {
+                    }}
+                    const newCredential = await navigator.credentials.create({{
+                        publicKey: {{
                             challenge: new Uint8Array([8,22,50,90,12,33,44,11]),
-                            rp: { name: "Nexa AI Elite Admin" },
-                            user: {
+                            rp: {{ name: "Nexa AI Elite Admin" }},
+                            user: {{
                                 id: new Uint8Array([1, 2, 3, 4]),
                                 name: "admin@nexa.ai",
                                 displayName: "Elite Admin"
-                            },
-                            pubKeyCredParams: [ { alg: -7, type: "public-key" } ],
+                            }},
+                            pubKeyCredParams: [ {{ alg: -7, type: "public-key" }} ],
                             timeout: 60000,
                             attestation: "direct"
-                        }
-                    });
-                    if (newCredential) {
+                        }}
+                    }});
+                    if (newCredential) {{
                         localStorage.setItem("nexa_bio_unlocked", "true");
                         alert("Biometric passkey registered successfully on this browser!");
-                    }
-                } catch (e) {
+                    }}
+                }} catch (e) {{
                     alert("Biometric registration failed or canceled.");
-                }
-            }
+                }}
+            }}
         </script>
     </body>
     </html>
