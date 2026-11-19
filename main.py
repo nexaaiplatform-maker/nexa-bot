@@ -1118,7 +1118,7 @@ async def record_affiliate_commission_and_revenue(
             elif http_client and TELEGRAM_BOT_TOKEN:
                 await http_client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode": "Markdown"}
+                    json={"chat_id": int(partner_id), "text": notify_text, "parse_mode="Markdown"}
                 )
     except Exception as e:
         logger.error(f"Affiliate revenue split calculation error: {e}")
@@ -1169,27 +1169,48 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 
 
 # -------------------------------------------------------------------
-# Telegram Master Bot Handlers & Prof. Nexa Economic Advisor
+# Telegram Master Bot Handlers & Nexa Elite Business Advisor
 # -------------------------------------------------------------------
 async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Starts the interactive Professor of Economics & Business Growth Advisor session with chat understanding."""
+    """Starts a conversational, hook-driven elite business advisory session covering all sectors, legal compliance, and announcements."""
     context.user_data["advice_step"] = "awaiting_business_type"
+    context.user_data["advice_history"] = []
+
+    recent_announcements = ""
+    if supabase:
+        try:
+            t_res = await asyncio.to_thread(
+                lambda: supabase.table("support_tickets").select("message, created_at").order("created_at", desc=True).limit(2).execute()
+            )
+            if t_res.data:
+                recent_announcements = "\n".join([f"• {str(item.get('message', ''))[:90]}" for item in t_res.data])
+        except Exception:
+            pass
+
+    announcement_block = (
+        f"\n📢 **ወቅታዊ ማሳሰቢያ እና የመድረክ ዜና:**\n{recent_announcements}\n"
+        if recent_announcements
+        else "\n📢 **ወቅታዊ ማሳሰቢያ:** ሕጋዊ ንግድን፣ የንግድ ፈቃድ/ግብር ስርዓትን እና የዲጂታል ሽያጭ (Telebirr & AI Automation) ዕድሎችን በማቀናጀት ንግድዎን እንዲያሳድጉ እናግዝዎታለን።\n"
+    )
 
     intro_text = (
-        "🎓 **ፕሮፌሰር ኔክሳ — የኢኮኖሚ እና የንግድ ዕድገት አማካሪ (Prof. Nexa Economic & Wealth Strategist)**\n"
+        "⚡ **ኔክሳ ኤላይት — የንግድ እና የስትራቴጂ አማካሪ (Nexa Elite Business Advisor)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "ሰላም! እኔ የኢኮኖሚ እና የቢዝነስ ፕሮፌሰር ረዳትዎ ነኝ። ንግድዎን ያለ ምንም ተጨማሪ ኪሳራ በትርፍ እንዲያሳድጉ፣ "
-        "ገበያውን እንዲቆጣጠሩ እና ገቢዎን በእጥፍ እንዲጨምሩ ልዩ ስልታዊ ምክር እሰጥዎታለሁ!\n\n"
-        "🧠 **በቀጥታ ከእኔ ጋር ማውራት ይችላሉ!** ከዚህ በታች ካሉት ዘርፎች መምረጥ ወይም የሚፈልጉትን ማንኛውንም የንግድ ወይም የኢኮኖሚ ጥያቄ በቀጥታ በጽሑፍ ወይም በድምጽ (Voice Note) መጠየቅ ይችላሉ።\n\n"
-        "📌 **የንግድ ዘርፍዎን ይምረጡ (ወይም በቀጥታ ይጻፉኝ):**"
+        "ሰላም! እኔ ስለ **ማንኛውም የንግድ ዘርፍ** (ሱቅ፣ ኦንላይን ሽያጭ፣ ሪል እስቴት፣ ካፌ፣ አገልግሎት፣ አስመጪ/ላኪ፣ ቴክኖሎጂ ወይም አዲስ ጀማሪ ሐሳብ) "
+        "ጠንቅቄ የምረዳ እና ንግድዎን በትርፍ እንዲመሩ የማግዝ የቅርብ የንግድ አማካሪዎ ነኝ።\n\n"
+        "🎯 **ጥያቄ ካለዎት በማንኛውም ሰዓት መጠየቅ ይችላሉ!** ስለ ገበያ፣ ደንበኛ ማፍራት፣ ዋጋ አወሳሰን፣ ካፒታል አጠቃቀም፣ "
+        "የንግድ ሕጋዊነት (ፈቃድ፣ ግብር፣ ደረሰኝ እና የሸማቾች ጥበቃ) ወይም ስለ አዳዲስ የንግድ ዕድሎች በቀጥታ ማውራት እንችላለን።"
+        f"{announcement_block}\n"
+        "👇 **ለመጀመር ዘርፍዎን ይምረጡ ወይም በቀጥታ ጥያቄዎን ይጻፉልኝ:**"
     )
 
     keyboard = [
         [InlineKeyboardButton("🛍️ ችርቻሮ / ሱቅ / ኢ-ኮሜርስ (Retail & Shop)", callback_data="adv_type_retail")],
         [InlineKeyboardButton("🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate)", callback_data="adv_type_realestate")],
         [InlineKeyboardButton("🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)", callback_data="adv_type_hospitality")],
-        [InlineKeyboardButton("💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)", callback_data="adv_type_startup")],
-        [InlineKeyboardButton("💰 ካፒታል አለኝ — ምን ልስራ? (Investment Advice)", callback_data="adv_type_investor")],
+        [InlineKeyboardButton("💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)", callback_data="adv_type_services")],
+        [InlineKeyboardButton("⚖️ የንግድ ሕጋዊነት እና ፈቃድ/ግብር (Legal & Compliance)", callback_data="adv_type_legal")],
+        [InlineKeyboardButton("💡 ሐሳብ / ካፒታል አለኝ — ምን ልስራ? (Ideas & Capital)", callback_data="adv_type_investor")],
         [InlineKeyboardButton("🔙 ወደ ዋና ገጽ ይመለሱ", callback_data="start_menu")]
     ]
 
@@ -1200,16 +1221,16 @@ async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_TYPE, business_type_label: str):
-    """Prompts the user for their current financial situation, capital, and challenges."""
+    """Engages the user in an open, hook-driven conversation about their business, questions, and legal/market context."""
     context.user_data["advice_business_type"] = business_type_label
     context.user_data["advice_step"] = "awaiting_situation"
+    context.user_data.setdefault("advice_history", [])
 
     prompt_text = (
-        f"🎓 **በጣም ጥሩ! የተመረጠው ዘርፍ:** {business_type_label}\n\n"
-        "አሁን ደግሞ እንደ ኢኮኖሚ ፕሮፌሰር ትክክለኛውን የትርፍ ቀመር እንድነድፍልዎ **አሁን ያሉበትን ሁኔታ** በአጭሩ ይንገሩኝ፦\n"
-        "1️⃣ በእጅዎ ያለው ካፒታል ወይም ወርሃዊ ገቢ ስንት ነው?\n"
-        "2️⃣ ዋናው ችግርዎ ምንድን ነው? (ለምሳሌ፡ የደንበኛ እጥረት፣ የዋጋ ውድድር፣ ወይም አዲስ ገበያ ማግኘት)\n\n"
-        "✍️ *ማንኛውንም ጥያቄ ወይም ሁኔታዎን ከታች በጽሑፍ ወይም በድምጽ (Voice Note) ይጻፉልኝ...*"
+        f"🔥 **አሪፍ ነው! በ {business_type_label} ላይ አተኩረን እናውራ።**\n\n"
+        "አሁን ምን እየሰሩ ነው ወይም ምን ማሳካት ይፈልጋሉ? ጥያቄ ካለዎት አሁኑኑ ይጠይቁኝ — "
+        "ገበያ ለማግኘት፣ ሽያጭ ለመጨመር፣ ሕጋዊ የንግድ አሰራርን ለማስተካከል ወይም ካፒታልን በብልሃት ለመጠቀም ምን እንደሚያስፈልግ በቀጥታ እንነጋገራለን።\n\n"
+        "💬 *ጥያቄዎን ወይም ሐሳብዎን በጽሑፍ ወይም በድምጽ (Voice Note) ይጻፉልኝ — ከፈለጉ ስለ ካፒታልዎ እና ስለ ዋናው ፈተናዎም ይንገሩኝ...*"
     )
 
     keyboard = [[InlineKeyboardButton("🔙 ዘርፍ ቀይር", callback_data="business_advice_menu")]]
@@ -1220,62 +1241,86 @@ async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def generate_professor_economic_advice(update: Update, context: ContextTypes.DEFAULT_TYPE, user_situation: str):
-    """Uses Groq AI to deliver deep, practical Ethiopian market economic & profit-maximization advice with full chat understanding."""
+    """Conversational, hook-driven elite business advisor aware of all sectors, legal business practices, and announcements."""
     user_id = str(update.effective_user.id)
-    business_type = context.user_data.get("advice_business_type", "አጠቃላይ ንግድ (General Business)")
+    business_type = context.user_data.get("advice_business_type", "ሁሉም የንግድ ዘርፎች (All Businesses)")
+    advice_history = context.user_data.get("advice_history", [])
 
     await update.effective_message.reply_chat_action("typing")
 
     existing_store_info = ""
+    announcements_context = ""
     if supabase:
         try:
-            s_res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("store_name, plan_tier, inventory_data").eq("owner_telegram_id", user_id).execute()
+            s_res, ann_res = await asyncio.gather(
+                asyncio.to_thread(
+                    lambda: supabase.table("stores").select("store_name, plan_tier, inventory_data").eq("owner_telegram_id", user_id).execute()
+                ),
+                asyncio.to_thread(
+                    lambda: supabase.table("support_tickets").select("message, status").order("created_at", desc=True).limit(3).execute()
+                )
             )
             if s_res.data:
                 s = s_res.data[0]
-                existing_store_info = f"User already owns Nexa store '{s.get('store_name')}' (Tier {s.get('plan_tier', 1)})."
+                existing_store_info = f"User owns Nexa store '{s.get('store_name')}' (Tier {s.get('plan_tier', 1)})."
+            if ann_res.data:
+                announcements_context = "Recent platform/user updates: " + " | ".join([str(a.get("message", ""))[:80] for a in ann_res.data])
         except Exception:
             pass
 
-    professor_prompt = f"""
-    You are 'Prof. Nexa' (ፕሮፌሰር ኔክሳ), an elite, world-class Professor of Economics, Behavioral Finance, and Business Growth Strategist specializing in the Ethiopian economy (Addis Ababa & regional markets, ETB currency, Telebirr digital commerce, import/local supply chains, and high-margin customer acquisition).
+    history_formatted = "\n".join([f"{h.get('role', 'user')}: {h.get('content', '')}" for h in advice_history[-6:]])
 
-    User's Business Type: {business_type}
-    User's Current Chat / Situation & Capital/Challenges: {user_situation}
+    advisor_prompt = f"""
+    You are 'Nexa Elite Business Advisor' (ኔክሳ ኤላይት የንግድ አማካሪ) — a sharp, conversational, hook-driven, and deeply helpful business advisor who understands EVERY type of business, Ethiopian market realities (Addis Ababa & regional trade, ETB, Telebirr, digital commerce, import/local supply chains), legal business compliance, and current platform announcements.
+
+    IMPORTANT STYLE RULES:
+    - Do NOT use a stiff "professor/lecture" persona. Sound like a smart, practical, engaging, hook-driven business partner having a real conversation.
+    - Understand whatever business or question the user brings up and answer directly, clearly, and helpfully.
+    - Stay aware of legal business considerations where relevant (proper business registration/licensing, tax/receipt compliance, authentic products, transparent customer terms, data/privacy trust) in plain, practical business language—without acting as a formal courtroom lawyer.
+    - Stay aware of platform features and announcements ({announcements_context or "4-tier AI store bots, Telebirr receipt verification, 25% partner affiliate program, and AI voice/chat lead capture"}).
+    - Actively invite follow-up questions with an engaging hook (e.g., asking a sharp follow-up question or prompting them to ask whatever is on their mind next).
+    - Include natural, high-leverage ways to grow revenue using Nexa tools (24/7 AI bot sales via `/register`, zero-capital 25% partner commissions via `/partner`) only when naturally helpful, never forced.
+    - Write in clear, natural, engaging, grammatically accurate Amharic.
+
+    Selected Focus Area: {business_type}
     {existing_store_info}
+    Recent Conversation:
+    {history_formatted or "None yet"}
 
-    Your mission:
-    1. Understand the user's chat input deeply. Provide intellectual, tailored, practical economic and financial advice like a caring, brilliant Economics Professor who genuinely wants them to make maximum profit and build sustainable wealth.
-    2. Give them 3 concrete, actionable, zero-waste strategies to immediately increase their profit margin, price optimization, and attract high-paying Ethiopian customers without wasting money.
-    3. Show them how to make money for FREE right now using zero-capital growth hacks + Nexa AI automation (e.g., capturing every Telegram lead 24/7, upselling bundles, and earning 25% recurring commission via the Nexa Partner Affiliate program `/partner` with zero capital).
-    4. Write in eloquent, warm, inspiring, grammatically flawless Amharic (በጣም የዳበረ፣ ተግባራዊ እና አነቃቂ አማርኛ). Use clear bullet points and bold headers.
-    5. End by encouraging them to ask further follow-up questions about pricing, marketing, or capital allocation so they rely on Prof. Nexa as their permanent business mentor.
+    Current User Message: {user_situation}
     """
 
     advice_reply = (
-        "🎓 **የፕሮፌሰር ኔክሳ ስልታዊ የኢኮኖሚ ምክር**\n\n"
-        "ይቅርታ፣ አሁን ትንተናውን ማዘጋጀት አልተቻለም። እባክዎ ሁኔታዎን በድጋሚ ይጻፉ።"
+        "⚡ **ኔክሳ የንግድ አማካሪ**\n\n"
+        "ይቅርታ፣ አሁን ምላሽ ማዘጋጀት አልተቻለም። ጥያቄዎን በድጋሚ ይጻፉልኝ — በደስታ እንቀጥላለን!"
     )
     if async_groq_client:
         try:
+            messages = [{"role": "system", "content": advisor_prompt}]
+            for h in advice_history[-6:]:
+                messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+            messages.append({"role": "user", "content": user_situation})
+
             completion = await async_groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
-                messages=[{"role": "system", "content": professor_prompt}, {"role": "user", "content": user_situation}],
-                temperature=0.6,
+                messages=messages,
+                temperature=0.7,
                 max_tokens=900
             )
             advice_reply = completion.choices[0].message.content
         except Exception as e:
-            logger.error(f"Prof Nexa AI generation error: {e}")
-            advice_reply = f"⚠️ የAI ትንተና ስህተት አጋጥሟል: {str(e)}"
+            logger.error(f"Nexa Elite Advisor AI generation error: {e}")
+            advice_reply = f"⚠️ የAI ምላሽ ስህተት አጋጥሟል: {str(e)}"
 
+    advice_history.append({"role": "user", "content": user_situation})
+    advice_history.append({"role": "assistant", "content": advice_reply})
+    context.user_data["advice_history"] = advice_history[-8:]
     context.user_data["advice_step"] = "mentoring_active"
 
     keyboard = [
-        [InlineKeyboardButton("🤖 ነጻ የ AI ሻጭ ቦት ፍጠር (/register)", callback_data="start_register")],
-        [InlineKeyboardButton("🤝 ያለ ካፒታል 25% ኮሚሽን አግኝ (/partner)", callback_data="partner_menu")],
-        [InlineKeyboardButton("🔄 አዲስ የንግድ ምክር ጠይቅ", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("🤖 የ AI ሻጭ ቦት ፍጠር (/register)", callback_data="start_register")],
+        [InlineKeyboardButton("🤝 ያለ ካፒታል 25% ኮሚሽን (/partner)", callback_data="partner_menu")],
+        [InlineKeyboardButton("🔄 አዲስ ውይይት ጀምር", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]
     ]
     await update.effective_message.reply_text(advice_reply, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1283,6 +1328,7 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("advice_step", None)
+    context.user_data.pop("advice_history", None)
     context.user_data.pop("support_ticket_step", None)
     context.user_data.pop("partner_setup_step", None)
     context.user_data.pop("payment_step", None)
@@ -1345,7 +1391,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🇪🇹 እንኳን ደህና መጡ, {user.first_name}! ይህ እጅግ ዘመናዊ የሆነ የ AI ሱቅ እና የንግድ ማስተዳደሪያ መድረክ ነው።\n\n"
         f"📊 የመለያዎ ሁኔታ:\n{status_text}\n\n"
         "🎯 ፈጣን መመሪያ:\n"
-        "1️⃣ /advice - 🎓 የኢኮኖሚ እና የንግድ ዕድገት አማካሪ (Business Strategy Advice)\n"
+        "1️⃣ /advice - ⚡ የንግድ እና የስትራቴጂ አማካሪ (Elite Business Advisor)\n"
         "2️⃣ /register - አዲስ የ AI ሱቅ ቦት ይፍጠሩ\n"
         "3️⃣ /partner - የ Nexa አጋር በመሆን 25% ኮሚሽን ያግኙ\n"
         "4️⃣ /mybots - ቦቶችዎን ያስተዳድሩ\n"
@@ -1357,7 +1403,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (Business Strategy Advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("⚡ የንግድ አማካሪ — ጥያቄ ይጠይቁ (Business Advisor)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")],
         [InlineKeyboardButton("🚀 አባልነት ያሻሽሉ (ክፍያ ይፈጽሙ)", callback_data="buy_pro")],
         [InlineKeyboardButton("🤝 Nexa Partnership (25% ኮሚሽን ፕሮግራም)", callback_data="partner_menu")],
@@ -2098,7 +2144,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     keyboard = [
         [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
-        [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (/advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("⚡ የንግድ አማካሪ (/advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
     ]
 
@@ -2643,10 +2689,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "adv_type_realestate": "🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate & Property)",
             "adv_type_hospitality": "🍽️ ካፌ / ሬስቶራንት / ሆቴል (Food & Hospitality)",
             "adv_type_services": "💼 አገልግሎት / ኤጀንሲ / ቴክኖሎጂ (Services & Tech)",
+            "adv_type_legal": "⚖️ የንግድ ሕጋዊነት፣ ፈቃድ እና ግብር (Legal & Business Compliance)",
             "adv_type_startup": "🌱 አዲስ ንግድ ጀማሪ (New Startup Business)",
-            "adv_type_investor": "💰 ካፒታል ኢንቨስትመንት (Capital Allocation & Investment)"
+            "adv_type_investor": "💡 ሐሳብ እና ካፒታል አጠቃቀም (Business Ideas & Capital)"
         }
-        chosen_label = type_map.get(query.data, "አጠቃላይ ንግድ")
+        chosen_label = type_map.get(query.data, "ሁሉም የንግድ ዘርፎች")
         await ask_business_situation(update, context, chosen_label)
     elif query.data in ["buy_pro", "upgrade", "pay"]:
         await upgrade_command(update, context)
@@ -2874,7 +2921,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user_text:
         return
 
-    # 1. Prof. Nexa Business & Economic Advisor Interactive Flow with chat understanding
+    # 1. Nexa Elite Business Advisor Interactive Flow with chat understanding & history
     advice_step = context.user_data.get("advice_step")
     if advice_step == "awaiting_business_type":
         await ask_business_situation(update, context, user_text.strip())
@@ -3061,15 +3108,15 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     system_prompt = (
-        "You are Nexa AI Master Assistant and Professor of Economics. Analyze user intent from Amharic/English message. "
-        "The user might be asking random economic questions, seeking business strategy advice, or might have registered a bot earlier and forgotten what to do. "
-        "If they ask about business growth, making money, pricing, profit, or economics, classify as 'advice'. "
+        "You are Nexa AI Master Assistant and Elite Business Advisor. Analyze user intent from Amharic/English message. "
+        "The user might be asking business questions, seeking legal/market/growth advice, or might have registered a bot earlier and forgotten what to do. "
+        "If they ask about business growth, making money, pricing, profit, legal business compliance, announcements, or strategy, classify as 'advice'. "
         "Otherwise guide them clearly on what to click or type (e.g. /advice, /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone). "
         "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic. "
         "Classify into: 'advice', 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'general'. "
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
-    intent_result = {"intent": "general", "reply": "ሰላም! የፕሮፌሰር ኔክሳ የንግድ እና ኢኮኖሚ ምክር ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
+    intent_result = {"intent": "general", "reply": "ሰላም! የኔክሳ የንግድ አማካሪን ለማነጋገር እና ጥያቄ ለመጠየቅ /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if async_groq_client:
         try:
             response = await async_groq_client.chat.completions.create(
@@ -3104,7 +3151,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif intent == "setphone":
         await setphone_command(update, context)
     else:
-        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? የንግድ ምክር ለማግኘት /advice ወይም ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
+        await update.effective_message.reply_text(intent_result.get("reply", "ሰላም! ምን ልረዳዎ እችላለሁ? የንግድ ምክር እና ጥያቄ ለማግኘት /advice ወይም ቦቶቻችሁን ለማየት /mybots ይጠቀሙ።"))
 
 
 @app.on_event("startup")
