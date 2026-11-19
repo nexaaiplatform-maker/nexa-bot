@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 from groq import AsyncGroq
@@ -50,7 +51,6 @@ logger = logging.getLogger("NexaAI")
 # Initialize FastAPI app
 app = FastAPI(title="Nexa AI Elite Commerce Backend")
 
-from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -120,15 +120,15 @@ http_client: httpx.AsyncClient = None
 
 # Onboarding Conversation States
 STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN = range(6)
-PARTNER_TELEBIRR = 100  
-STORE_PHONE = 101       
-CHANGE_PHONE = 102      
-SUPPORT_TICKET = 103    
-BUSINESS_ADVICE = 104   
+PARTNER_TELEBIRR = 100
+STORE_PHONE = 101
+CHANGE_PHONE = 102
+SUPPORT_TICKET = 103
+BUSINESS_ADVICE = 104
 
 
 # -------------------------------------------------------------------
-# Constant-Time Security & Authentication Helpers
+# Constant-Time Security, Input Sanitization & Date Helpers
 # -------------------------------------------------------------------
 def verify_admin_pwd(pwd: str, header_pwd: str = None) -> bool:
     """Uses constant-time comparison to prevent timing attacks on the admin dashboard."""
@@ -139,15 +139,31 @@ def verify_admin_pwd(pwd: str, header_pwd: str = None) -> bool:
 
 
 def parse_dt(dt_str):
+    """Safely parses ISO strings or datetime objects into timezone-aware UTC datetimes."""
     if not dt_str:
         return datetime.now(timezone.utc) + timedelta(days=3)
     if isinstance(dt_str, datetime):
-        return dt_str
+        return dt_str if dt_str.tzinfo else dt_str.replace(tzinfo=timezone.utc)
     try:
-        clean = dt_str.replace("Z", "+00:00")
-        return datetime.fromisoformat(clean)
+        clean = str(dt_str).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(clean)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except Exception:
         return datetime.now(timezone.utc) + timedelta(days=3)
+
+
+def safe_escape_html(text: str) -> str:
+    """Escapes HTML special characters for safe rendering inside HTML templates."""
+    if text is None:
+        return ""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
 
 
 # -------------------------------------------------------------------
@@ -178,7 +194,7 @@ async def get_or_create_user_subscription(user_id: int):
         "is_pro": False,
         "plan_tier": 1
     }
-    
+
     if supabase:
         try:
             await asyncio.to_thread(
@@ -192,7 +208,7 @@ async def get_or_create_user_subscription(user_id: int):
             )
         except Exception as e:
             logger.error(f"Subscription upsert error: {e}")
-            
+
     return default_sub
 
 
@@ -249,7 +265,7 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
         file_path = file_resp.json().get("result", {}).get("file_path")
         if not file_path:
             return ""
-        
+
         audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
         audio_data = audio_bytes_resp.content
 
@@ -329,7 +345,7 @@ async def admin_live_data(pwd: str = "", x_admin_password: str = Header(None)):
 async def admin_view_chats(bot_token: str, pwd: str = ""):
     if not verify_admin_pwd(pwd):
         raise HTTPException(status_code=403, detail="Unauthorized")
-    
+
     chats_res = []
     if supabase:
         try:
@@ -343,13 +359,14 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
     bubbles = ""
     for c in reversed(chats_res):
         role = c.get("role")
-        content = c.get("content", "")
-        time_str = c.get("created_at", "")[:19].replace("T", " ")
+        content = safe_escape_html(c.get("content", ""))
+        time_str = safe_escape_html(str(c.get("created_at", ""))[:19].replace("T", " "))
+        chat_id_safe = safe_escape_html(c.get("chat_id", ""))
         if role == "user":
             bubbles += f"""
             <div class="flex flex-col items-start mb-3">
                 <div class="bg-slate-800 border border-slate-700 text-slate-200 px-4 py-2.5 rounded-2xl rounded-bl-sm max-w-lg text-xs">
-                    <p class="font-semibold text-[10px] text-blue-400 mb-1">Customer ({c.get('chat_id')})</p>
+                    <p class="font-semibold text-[10px] text-blue-400 mb-1">Customer ({chat_id_safe})</p>
                     {content}
                 </div>
                 <span class="text-[9px] text-slate-500 mt-1 ml-1">{time_str}</span>
@@ -379,9 +396,9 @@ async def admin_view_chats(bot_token: str, pwd: str = ""):
             <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl">
                 <div>
                     <h1 class="text-base font-bold text-white flex items-center gap-2"><span>💬</span> Live Customer Chat Inspector</h1>
-                    <p class="text-xs text-slate-400 font-mono">Bot Token: {bot_token[:10]}...</p>
+                    <p class="text-xs text-slate-400 font-mono">Bot Token: {safe_escape_html(bot_token[:10])}...</p>
                 </div>
-                <a href="/admin?pwd={pwd}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition">← Back to Command Center</a>
+                <a href="/admin?pwd={safe_escape_html(pwd)}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition">← Back to Command Center</a>
             </div>
             <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl h-[70vh] overflow-y-auto space-y-2">
                 {bubbles or '<p class="text-center text-slate-500 py-20">No conversation history found for this bot yet.</p>'}
@@ -408,7 +425,7 @@ async def admin_dashboard(pwd: str = ""):
                 <div class="inline-flex bg-blue-600/20 text-blue-400 p-4 rounded-full mb-4 text-2xl font-bold">💎</div>
                 <h2 class="text-2xl font-black mb-2 tracking-tight">Nexa AI Elite Control</h2>
                 <p class="text-slate-400 text-xs uppercase tracking-widest font-semibold mb-6">Option 1: Password or Option 2: Fingerprint</p>
-                
+
                 <form method="get" action="/admin" class="space-y-4">
                     <input type="password" name="pwd" placeholder="Option 1: Enter Master Admin Password" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" required />
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition duration-200 shadow-lg shadow-blue-600/30 text-sm">Secure Login with Password</button>
@@ -533,21 +550,22 @@ async def admin_dashboard(pwd: str = ""):
 
     subs_map = {str(s["user_id"]): s for s in subs_data}
     now = datetime.now(timezone.utc)
+    safe_pwd = safe_escape_html(pwd)
 
     reviews_html = ""
     for r in manual_reviews:
-        img_url = f"/admin/receipt/{r['screenshot_file_id']}?pwd={pwd}" if r.get("screenshot_file_id") else ""
+        img_url = f"/admin/receipt/{r['screenshot_file_id']}?pwd={safe_pwd}" if r.get("screenshot_file_id") else ""
         img_btn = f'<a href="{img_url}" target="_blank" class="text-blue-400 hover:underline font-medium">View Receipt</a>' if img_url else "No Image"
         status_lbl = '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400">Approved</span>' if r["status"] == "approved" else ('<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-400">Rejected</span>' if r["status"] == "rejected" else '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400">Pending Review</span>')
-        
+
         actions = ""
         if r["status"] == "pending":
             actions = f"""
             <form method="post" action="/admin/action" class="inline-flex gap-2">
-                <input type="hidden" name="pwd" value="{pwd}">
-                <input type="hidden" name="review_id" value="{r['id']}">
-                <input type="hidden" name="user_id" value="{r['user_id']}">
-                <input type="hidden" name="plan_tier" value="{r.get('plan_tier', 1)}">
+                <input type="hidden" name="pwd" value="{safe_pwd}">
+                <input type="hidden" name="review_id" value="{safe_escape_html(r['id'])}">
+                <input type="hidden" name="user_id" value="{safe_escape_html(r['user_id'])}">
+                <input type="hidden" name="plan_tier" value="{safe_escape_html(r.get('plan_tier', 1))}">
                 <button name="decision" value="approve" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Approve</button>
                 <button name="decision" value="reject" class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reject</button>
             </form>
@@ -555,10 +573,10 @@ async def admin_dashboard(pwd: str = ""):
 
         reviews_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
-            <td class="p-4 font-medium text-slate-200">{r.get('payer_name')}<br><span class="text-xs text-slate-400">{r.get('payer_phone')}</span></td>
-            <td class="p-4 text-slate-300">Tier {r.get('plan_tier', 1)}</td>
-            <td class="p-4 text-slate-300">Expected: <b class="text-emerald-400">{r.get('expected_amount')} ETB</b><br>Detected: {r.get('detected_amount')} ETB</td>
-            <td class="p-4 font-mono text-xs text-blue-400">{r.get('reference_id')}</td>
+            <td class="p-4 font-medium text-slate-200">{safe_escape_html(r.get('payer_name'))}<br><span class="text-xs text-slate-400">{safe_escape_html(r.get('payer_phone'))}</span></td>
+            <td class="p-4 text-slate-300">Tier {safe_escape_html(r.get('plan_tier', 1))}</td>
+            <td class="p-4 text-slate-300">Expected: <b class="text-emerald-400">{safe_escape_html(r.get('expected_amount'))} ETB</b><br>Detected: {safe_escape_html(r.get('detected_amount'))} ETB</td>
+            <td class="p-4 font-mono text-xs text-blue-400">{safe_escape_html(r.get('reference_id'))}</td>
             <td class="p-4">{img_btn}</td>
             <td class="p-4">{status_lbl}</td>
             <td class="p-4">{actions}</td>
@@ -569,15 +587,15 @@ async def admin_dashboard(pwd: str = ""):
     for t in support_tickets:
         t_status = t.get("status", "open")
         status_lbl = '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400">Resolved</span>' if t_status == "resolved" else '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400">Open Ticket</span>'
-        reply_txt = t.get("admin_reply") or "No reply yet"
+        reply_txt = safe_escape_html(t.get("admin_reply") or "No reply yet")
         tickets_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
-            <td class="p-4 font-mono text-xs text-slate-400">{t.get('user_id')}</td>
-            <td class="p-4 text-slate-200 text-sm max-w-xs">{t.get('message')}</td>
+            <td class="p-4 font-mono text-xs text-slate-400">{safe_escape_html(t.get('user_id'))}</td>
+            <td class="p-4 text-slate-200 text-sm max-w-xs">{safe_escape_html(t.get('message'))}</td>
             <td class="p-4 text-slate-400 text-xs italic max-w-xs">{reply_txt}</td>
             <td class="p-4">{status_lbl}</td>
             <td class="p-4">
-                <button onclick="openSupportModal('{t.get('id')}', '{t.get('user_id')}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reply ✉️</button>
+                <button onclick="openSupportModal('{safe_escape_html(t.get('id'))}', '{safe_escape_html(t.get('user_id'))}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reply ✉️</button>
             </td>
         </tr>
         """
@@ -586,11 +604,11 @@ async def admin_dashboard(pwd: str = ""):
     for p in partners_data:
         partners_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
-            <td class="p-4 font-medium text-white">{p.get('partner_name', 'Partner')}</td>
-            <td class="p-4 font-mono text-xs text-emerald-400">{p.get('telebirr_number')}</td>
-            <td class="p-4 font-mono text-xs text-blue-400">nexa_bot?start=ref_{p.get('partner_id')}</td>
-            <td class="p-4 text-slate-300 font-semibold">{p.get('total_referrals', 0)}</td>
-            <td class="p-4 text-emerald-400 font-bold">{p.get('total_earned', 0):,.2f} ETB</td>
+            <td class="p-4 font-medium text-white">{safe_escape_html(p.get('partner_name', 'Partner'))}</td>
+            <td class="p-4 font-mono text-xs text-emerald-400">{safe_escape_html(p.get('telebirr_number'))}</td>
+            <td class="p-4 font-mono text-xs text-blue-400">nexa_bot?start=ref_{safe_escape_html(p.get('partner_id'))}</td>
+            <td class="p-4 text-slate-300 font-semibold">{safe_escape_html(p.get('total_referrals', 0))}</td>
+            <td class="p-4 text-emerald-400 font-bold">{float(p.get('total_earned', 0)):,.2f} ETB</td>
         </tr>
         """
 
@@ -600,7 +618,7 @@ async def admin_dashboard(pwd: str = ""):
         sub = subs_map.get(owner_id, {})
         is_pro = sub.get("is_pro", False)
         trial_exp = parse_dt(sub.get("trial_expires"))
-        
+
         if is_pro:
             badge = '<span class="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-500/20 text-blue-400">PRO VIP ⭐</span>'
         elif now < trial_exp:
@@ -608,16 +626,18 @@ async def admin_dashboard(pwd: str = ""):
         else:
             badge = '<span class="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-400">EXPIRED ⚠️</span>'
 
+        b_tok = str(s.get("bot_token", ""))
+        store_nm = str(s.get("store_name", ""))
         stores_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
-            <td class="p-4 font-semibold text-white">{s.get('store_name')}</td>
-            <td class="p-4 font-mono text-xs text-slate-400">{s.get('bot_token')[:10]}...</td>
-            <td class="p-4 text-slate-300">Tier {s.get('plan_tier', 1)} ({s.get('ui_theme', 'executive').capitalize()})</td>
-            <td class="p-4 font-mono text-xs text-slate-400">{owner_id}</td>
+            <td class="p-4 font-semibold text-white">{safe_escape_html(store_nm)}</td>
+            <td class="p-4 font-mono text-xs text-slate-400">{safe_escape_html(b_tok[:10])}...</td>
+            <td class="p-4 text-slate-300">Tier {safe_escape_html(s.get('plan_tier', 1))} ({safe_escape_html(str(s.get('ui_theme', 'executive')).capitalize())})</td>
+            <td class="p-4 font-mono text-xs text-slate-400">{safe_escape_html(owner_id)}</td>
             <td class="p-4">{badge}</td>
             <td class="p-4 flex items-center gap-2">
-                <a href="/admin/chats/{s.get('bot_token')}?pwd={pwd}" class="text-blue-400 hover:underline font-semibold text-xs">Inspect 💬</a>
-                <button onclick="openSyncModal('{owner_id}', '{s.get('store_name')}', {s.get('plan_tier', 1)})" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-semibold">Sync Tier ⚡</button>
+                <a href="/admin/chats/{safe_escape_html(b_tok)}?pwd={safe_pwd}" class="text-blue-400 hover:underline font-semibold text-xs">Inspect 💬</a>
+                <button onclick="openSyncModal('{safe_escape_html(owner_id)}', '{safe_escape_html(store_nm)}', {int(s.get('plan_tier', 1))})" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-semibold">Sync Tier ⚡</button>
             </td>
         </tr>
         """
@@ -626,10 +646,10 @@ async def admin_dashboard(pwd: str = ""):
     for l in leads_data[:25]:
         leads_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
-            <td class="p-4 font-medium text-white">{l.get('visitor_name', 'Anonymous')}</td>
-            <td class="p-4 text-emerald-400 font-mono">{l.get('phone_number', 'No Phone ❌')}</td>
-            <td class="p-4 text-slate-300 text-sm">{l.get('interest_summary', 'General Inquiry')}</td>
-            <td class="p-4 font-mono text-xs text-slate-500">{l.get('visitor_telegram_id')}</td>
+            <td class="p-4 font-medium text-white">{safe_escape_html(l.get('visitor_name', 'Anonymous'))}</td>
+            <td class="p-4 text-emerald-400 font-mono">{safe_escape_html(l.get('phone_number', 'No Phone ❌'))}</td>
+            <td class="p-4 text-slate-300 text-sm">{safe_escape_html(l.get('interest_summary', 'General Inquiry'))}</td>
+            <td class="p-4 font-mono text-xs text-slate-500">{safe_escape_html(l.get('visitor_telegram_id'))}</td>
         </tr>
         """
 
@@ -648,7 +668,7 @@ async def admin_dashboard(pwd: str = ""):
                 <h1 class="text-xl font-black tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">NEXA ELITE ADMIN</h1>
             </div>
             <div class="flex items-center gap-4">
-                <a href="{NETLIFY_DASHBOARD_URL}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
+                <a href="{safe_escape_html(NETLIFY_DASHBOARD_URL)}" target="_blank" class="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition border border-indigo-500/30">🌐 Open Netlify Live UI</a>
                 <button onclick="registerBiometrics()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition border border-slate-700">🧬 Enable Biometrics</button>
                 <a href="/admin" class="bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 px-4 py-2 rounded-xl text-xs font-semibold transition">Lock Session</a>
             </div>
@@ -795,7 +815,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/support-reply", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{pwd}" }})
+                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
@@ -831,7 +851,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/sync-tier", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{pwd}" }})
+                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
@@ -856,7 +876,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/broadcast", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ message: msg, pwd: "{pwd}" }})
+                        body: JSON.stringify({{ message: msg, pwd: "{safe_pwd}" }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
@@ -1124,7 +1144,7 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 
     now = datetime.now(timezone.utc)
     twenty_four_hours_ago = now - timedelta(hours=24)
-    
+
     telebirr_24h_total = 0.0
     if supabase:
         try:
@@ -1140,8 +1160,8 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
         except Exception as e:
             logger.error(f"Telebirr 24h cap check error: {e}")
 
-    SAFE_TELEBIRR_CAP = 20000.0 
-    
+    SAFE_TELEBIRR_CAP = 20000.0
+
     if telebirr_24h_total + amount_etb <= SAFE_TELEBIRR_CAP:
         return ("Telebirr Secure Gateway", TELEBIRR_ACCOUNT_MASKED, amount_etb, "TELEBIRR")
     else:
@@ -1154,7 +1174,7 @@ async def select_optimal_payout_destination(amount_etb: int, partner_id: str = N
 async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Starts the interactive Professor of Economics & Business Growth Advisor session with chat understanding."""
     context.user_data["advice_step"] = "awaiting_business_type"
-    
+
     intro_text = (
         "🎓 **ፕሮፌሰር ኔክሳ — የኢኮኖሚ እና የንግድ ዕድገት አማካሪ (Prof. Nexa Economic & Wealth Strategist)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1163,7 +1183,7 @@ async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_
         "🧠 **በቀጥታ ከእኔ ጋር ማውራት ይችላሉ!** ከዚህ በታች ካሉት ዘርፎች መምረጥ ወይም የሚፈልጉትን ማንኛውንም የንግድ ወይም የኢኮኖሚ ጥያቄ በቀጥታ በጽሑፍ ወይም በድምጽ (Voice Note) መጠየቅ ይችላሉ።\n\n"
         "📌 **የንግድ ዘርፍዎን ይምረጡ (ወይም በቀጥታ ይጻፉኝ):**"
     )
-    
+
     keyboard = [
         [InlineKeyboardButton("🛍️ ችርቻሮ / ሱቅ / ኢ-ኮሜርስ (Retail & Shop)", callback_data="adv_type_retail")],
         [InlineKeyboardButton("🏡 ሪል እስቴት / ኮንስትራክሽን (Real Estate)", callback_data="adv_type_realestate")],
@@ -1172,7 +1192,7 @@ async def business_advice_command(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("💰 ካፒታል አለኝ — ምን ልስራ? (Investment Advice)", callback_data="adv_type_investor")],
         [InlineKeyboardButton("🔙 ወደ ዋና ገጽ ይመለሱ", callback_data="start_menu")]
     ]
-    
+
     if update.callback_query:
         await update.callback_query.message.edit_text(intro_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
@@ -1183,7 +1203,7 @@ async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_T
     """Prompts the user for their current financial situation, capital, and challenges."""
     context.user_data["advice_business_type"] = business_type_label
     context.user_data["advice_step"] = "awaiting_situation"
-    
+
     prompt_text = (
         f"🎓 **በጣም ጥሩ! የተመረጠው ዘርፍ:** {business_type_label}\n\n"
         "አሁን ደግሞ እንደ ኢኮኖሚ ፕሮፌሰር ትክክለኛውን የትርፍ ቀመር እንድነድፍልዎ **አሁን ያሉበትን ሁኔታ** በአጭሩ ይንገሩኝ፦\n"
@@ -1191,7 +1211,7 @@ async def ask_business_situation(update: Update, context: ContextTypes.DEFAULT_T
         "2️⃣ ዋናው ችግርዎ ምንድን ነው? (ለምሳሌ፡ የደንበኛ እጥረት፣ የዋጋ ውድድር፣ ወይም አዲስ ገበያ ማግኘት)\n\n"
         "✍️ *ማንኛውንም ጥያቄ ወይም ሁኔታዎን ከታች በጽሑፍ ወይም በድምጽ (Voice Note) ይጻፉልኝ...*"
     )
-    
+
     keyboard = [[InlineKeyboardButton("🔙 ዘርፍ ቀይር", callback_data="business_advice_menu")]]
     if update.callback_query:
         await update.callback_query.message.edit_text(prompt_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1203,9 +1223,9 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
     """Uses Groq AI to deliver deep, practical Ethiopian market economic & profit-maximization advice with full chat understanding."""
     user_id = str(update.effective_user.id)
     business_type = context.user_data.get("advice_business_type", "አጠቃላይ ንግድ (General Business)")
-    
+
     await update.effective_message.reply_chat_action("typing")
-    
+
     existing_store_info = ""
     if supabase:
         try:
@@ -1270,7 +1290,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await log_visitor(user_id)
-    
+
     args = context.args
     if args and args[0].startswith("ref_"):
         partner_id = args[0].replace("ref_", "")
@@ -1289,13 +1309,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logger.error(f"Referral record error: {e}")
-    
+
     sub_data = await get_or_create_user_subscription(user_id)
     has_access = await verify_active_access(user_id)
     trial_exp = parse_dt(sub_data["trial_expires"])
     now = datetime.now(timezone.utc)
     remaining_days = max(0, (trial_exp - now).days)
-    
+
     store_tier_name = "Starter"
     if supabase:
         try:
@@ -1309,7 +1329,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Store tier check error: {e}")
 
     if sub_data["is_pro"] and has_access:
-        status_text = f"⭐ ንቁ አባልነት (VIP Enterprise — {store_name if 'store_name' in locals() else store_tier_name}) — የንግድ አውቶሜሽን ስርዓትዎ በሥራ ላይ አለ።"
+        status_text = f"⭐ ንቁ አባልነት (VIP Enterprise — {store_tier_name}) — የንግድ አውቶሜሽን ስርዓትዎ በሥራ ላይ አለ።"
     elif has_access:
         status_text = (
             f"📋 የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
@@ -1335,7 +1355,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "8️⃣ /support - የደንበኞች ድጋፍ (Customer Support)\n"
         "9️⃣ /pay - አባልነትዎን ያሻሽሉ"
     )
-    
+
     keyboard = [
         [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (Business Strategy Advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("💎 አዲስ የ AI ቦት ፍጠር (/register)", callback_data="start_register")],
@@ -1357,9 +1377,9 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"የእኛ የድጋፍ ቡድን እና AI ረዳት ወዲያውኑ ምላሽ ይሰጡዎታል!"
     )
     context.user_data["support_ticket_step"] = "awaiting_ticket_message"
-    
+
     keyboard = [[InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]]
-    
+
     if update.callback_query:
         await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
@@ -1459,7 +1479,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     owner_id = str(user_id)
-    
+
     store_name = "Nexa Store"
     if supabase:
         try:
@@ -1475,26 +1495,26 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⭐ **የፕሮ አባልነት ዕቅድ ይምረጡ ({store_name})**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• **Tier 1 (Starter)**: 1,000 ብር / ወር\n"
-        f"  _(Core AI Sales, Text Catalog, Photo Support)_ \n\n"
+        f"  _(Core AI Sales, Text Catalog, Photo Support)_\n\n"
         f"• **Tier 2 (Business Pro)**: 2,500 ብር / ወር\n"
-        f"  _(Advanced AI, Photo Catalogs, Priority Leads)_ \n\n"
+        f"  _(Advanced AI, Photo Catalogs, Priority Leads)_\n\n"
         f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
-        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_ \n\n"
+        f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_\n\n"
         f"• **Tier 4 (AI Voice Concierge)**: 7,000 ብር / ወር\n"
-        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_ \n\n"
+        f"  _(Includes Live AI Voice Calls & Automated Phone Receptionist in Amharic)_\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
         f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
         f"እባክዎ ክፍያ ለመፈጸም ከታች ካሉት ዕቅዶች አንዱን ይምረጡ:"
     )
-    
+
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_pay_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_pay_2")],
         [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_pay_3")],
         [InlineKeyboardButton("💎 Tier 4: AI Voice Concierge (7,000 ብር / ወር)", callback_data="tier_pay_4")]
     ]
-    
+
     if update.callback_query:
         try:
             await update.callback_query.message.edit_text(tier_select_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1507,7 +1527,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_tier_upgrade_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, tier_num: int):
     context.user_data["selected_tier"] = tier_num
     context.user_data["payment_step"] = "awaiting_payer_name"
-    
+
     target_msg = update.callback_query.message if update.callback_query else update.effective_message
     if update.callback_query:
         await update.callback_query.answer()
@@ -1539,10 +1559,10 @@ async def leads_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = []
             for store in stores_res.data:
                 keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']}", callback_data=f"select_lead_bot_{store['bot_token']}")])
-            
+
             target_msg = update.callback_query.message if update.callback_query else update.effective_message
             text_prompt = "📋 **የሊድስ እና ስታቲስቲክስ መቆጣጠሪያ**\n\nእባክዎ መረጃውን ማየት የሚፈልጉትን ቦት/መደብር ይምረጡ:"
-            
+
             if update.callback_query:
                 await target_msg.edit_text(text_prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
             else:
@@ -1729,7 +1749,7 @@ async def weekly_summary_command(update: Update, context: ContextTypes.DEFAULT_T
         f"• ባለፉት 7 ቀናት የተመዘገቡ አዳዲስ ሊድስ/ስልክ ቁጥሮች: {leads_this_week}\n"
         f"• የሳምንቱ የክፍያ እንቅስቃሴ: {weekly_revenue:,.2f} ብር\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠقم!"
+        f"💡 ደንበኞችዎን በዝርዝር ለማየት `/leads` የሚለውን ትዕዛዝ ይጠቀሙ!"
     )
     await update.effective_message.reply_text(weekly_text, parse_mode="Markdown")
 
@@ -1868,7 +1888,7 @@ async def receive_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.effective_message.reply_text(
-        f"እርምጃ 2 ከ 6: የንግድ ዘርፍዎን (Industry) ይምረጡ:",
+        "እርምጃ 2 ከ 6: የንግድ ዘርፍዎን (Industry) ይምረጡ:",
         reply_markup=reply_markup
     )
     return INDUSTRY
@@ -1915,7 +1935,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_message = update.effective_message.reply_text
 
     context.user_data["ui_theme"] = chosen_theme
-    
+
     keyboard = [
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_2")],
@@ -1959,9 +1979,9 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_input = update.effective_message.text
-    
+
     await update.effective_message.reply_text("🔄 AI is analyzing, sorting, and formatting your catalog data for Supabase...")
-    
+
     structured_inventory = raw_input
     if async_groq_client:
         try:
@@ -1988,7 +2008,7 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_token = update.effective_message.text.strip()
-    
+
     if not re.match(r"^\d+:[A-Za-z0-9_-]{35}$", bot_token):
         await update.effective_message.reply_text("⚠️ ያስገቡት የቦት ቶከን ቅርጸት ልክ አይደለም። እባክዎ ከ @BotFather ትክክለኛውን ቶከን ኮፒ አድርገው ይላኩ:")
         return BOT_TOKEN
@@ -2005,7 +2025,7 @@ async def receive_bot_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_input = update.effective_message.text.strip()
-    
+
     if not re.match(r"^0[79]\d{8}$", phone_input.replace(" ", "")):
         await update.effective_message.reply_text("⚠️ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር አይደለም። እባክዎ በ 09 ወይም በ 07 የሚጀምር 10 አሃዝ ቁጥር ይጻፉ (ለምሳሌ: 0911223344):")
         return STORE_PHONE
@@ -2018,10 +2038,10 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
     bot_token = context.user_data.get("bot_token")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
-    
+
     try:
         resp = await http_client.post(
-            f"https://api.telegram.org/bot{bot_token}/setWebhook", 
+            f"https://api.telegram.org/bot{bot_token}/setWebhook",
             json={"url": tenant_webhook_url}
         )
         if not resp.json().get("ok"):
@@ -2075,13 +2095,13 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n\n"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
-    
+
     keyboard = [
         [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
         [InlineKeyboardButton("🎓 የንግድ እና ኢኮኖሚ ምክር (/advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
     ]
-    
+
     await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -2114,7 +2134,7 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = []
             for store in res.data:
                 keyboard.append([InlineKeyboardButton(f"🤖 {store['store_name']} ({store.get('business_phone', 'No Phone')})", callback_data=f"change_phone_bot_{store['bot_token']}")])
-            
+
             await update.effective_message.reply_text(
                 "📱 **ስልክ ቁጥር መቀየሪያ (Change Phone)**\n\nእባክዎ ስልክ ቁጥሩን ማሻሻል የሚፈልጉትን መደብር/ቦት ይምረጡ:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -2126,7 +2146,7 @@ async def setphone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_input = update.effective_message.text.strip()
-    
+
     if not re.match(r"^0[79]\d{8}$", phone_input.replace(" ", "")):
         await update.effective_message.reply_text("⚠️ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር አይደለም። እባክዎ በ 09 ወይም በ 07 የሚጀምር 10 አሃዝ ቁጥር ይጻፉ:")
         return CHANGE_PHONE
@@ -2213,12 +2233,12 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = str(update.effective_user.id)
     caption = update.message.caption or ""
     match = re.search(r"/addmedia\s+([a-zA-Z0-9_\-]+)", caption)
-    
+
     if not match:
         return
 
     item_tag = match.group(1).lower()
-    
+
     if supabase:
         try:
             stores_res = await asyncio.to_thread(
@@ -2229,7 +2249,7 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
 
             bot_token = stores_res.data[0]["bot_token"]
-            
+
             file_id = ""
             media_type = "photo"
             if update.message.photo:
@@ -2264,7 +2284,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     data = await request.json()
     caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
     spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
-    
+
     store = None
     if supabase:
         try:
@@ -2273,27 +2293,27 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
                 store = res.data[0]
         except Exception as e:
             logger.error(f"Voice webhook store fetch error: {e}")
-            
+
     if not store:
         return {"status": "error", "message": "Store not found"}
-        
+
     if store.get("voice_ai_active") is False:
         return {"status": "paused", "message": "AI Voice concierge is currently stopped by store owner"}
 
     plan_tier = store.get("plan_tier", 1)
     if plan_tier < 4:
         return {"status": "unauthorized", "message": "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"}
-        
+
     inventory = store.get("inventory_data", "")
     store_name = store.get("store_name", "Nexa Store")
-    
+
     system_prompt = (
         f"You are the professional AI Voice Receptionist for company {store_name}. "
         "Your responses will be spoken aloud to callers via Text-to-Speech in Amharic or English. "
         "Keep answers polite, concise, natural, and directly helpful based on the store catalog below.\n\n"
         f"Catalog:\n{inventory}"
     )
-    
+
     ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
     if async_groq_client and spoken_text:
         try:
@@ -2309,7 +2329,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
             ai_response = completion.choices[0].message.content
         except Exception as e:
             logger.error(f"Voice AI generation error: {e}")
-            
+
     if supabase and caller_phone:
         try:
             await asyncio.to_thread(
@@ -2324,7 +2344,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
             )
         except Exception as lead_err:
             logger.error(f"Phone lead log error: {lead_err}")
-            
+
     return {
         "status": "success",
         "store_name": store_name,
@@ -2406,7 +2426,7 @@ async def admin_broadcast(data: BroadcastModel, x_admin_password: str = Header(N
             lambda: supabase.table("stores").select("owner_telegram_id").execute()
         )
         owner_ids = list({str(s["owner_telegram_id"]) for s in (stores_res.data or []) if s.get("owner_telegram_id")})
-        
+
         sent_count = 0
         broadcast_text = (
             f"📢 **NEXA AI OFFICIAL ANNOUNCEMENT**\n"
@@ -2500,7 +2520,7 @@ async def admin_record_affiliate_payout(data: AffiliatePayoutModel, x_admin_pass
 async def admin_support_reply(data: SupportReplyModel, x_admin_password: str = Header(None)):
     if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
-    
+
     if supabase:
         try:
             await asyncio.to_thread(
@@ -2539,11 +2559,11 @@ async def admin_support_reply(data: SupportReplyModel, x_admin_password: str = H
 async def sync_tier(data: TierSyncModel, x_admin_password: str = Header(None)):
     if not verify_admin_pwd(data.pwd, x_admin_password):
         return {"status": "error", "message": "Unauthorized password"}
-    
+
     user_id_str = str(data.user_id)
     tier = int(data.plan_tier)
     months = int(data.months or 1)
-    
+
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=30 * months)
     credits = TIER_CONFIG.get(tier, TIER_CONFIG[1])["credits"]
@@ -2614,7 +2634,7 @@ async def send_direct_message(data: DirectChatModel, x_admin_password: str = Hea
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == "business_advice_menu":
         await business_advice_command(update, context)
     elif query.data.startswith("adv_type_"):
@@ -2684,7 +2704,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     order = None
-    
+
     if supabase:
         try:
             res = await asyncio.to_thread(
@@ -2694,7 +2714,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 order = res.data[0]
         except Exception as e:
             logger.error(f"Fetch pending order error: {e}")
-    
+
     if not order:
         await update.effective_message.reply_text("❌ ምንም ንቁ ትዕዛዝ አልተገኘም። መጀመሪያ /upgrade ወይም /pay ይጠቀሙ።")
         return
@@ -2702,11 +2722,11 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     photo_file = await update.message.photo[-1].get_file()
     image_bytes = await photo_file.download_as_bytearray()
     base64_image = base64.b64encode(bytes(image_bytes)).decode('utf-8')
-    
+
     expected_amount_str = order["amount"]
     expected_payer_name = order.get("payer_name", "")
     expected_payer_phone = order.get("payer_phone", "")
-    
+
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None, "detected_name": None, "detected_phone": None}
 
     if async_groq_client:
@@ -2807,7 +2827,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 store_tier = 1
                 s_res = await asyncio.to_thread(lambda: supabase.table("stores").select("plan_tier").eq("owner_telegram_id", str(user_id)).limit(1).execute())
                 if s_res.data:
-                    store_tier = s_res.data[0].get("plan_tier", 1)
+                    store_tier = int(s_res.data[0].get("plan_tier") or 1)
 
                 await asyncio.to_thread(lambda: supabase.table("manual_review_queue").insert({
                     "user_id": str(user_id),
@@ -2872,7 +2892,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = user_obj.id
         username_str = f"@{user_obj.username}" if user_obj.username else "No Username"
         full_name_str = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or f"User {user_id}"
-        
+
         if supabase:
             try:
                 await asyncio.to_thread(
@@ -2959,12 +2979,12 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         phone = user_text.strip()
         context.user_data["payer_phone"] = phone
         context.user_data.pop("payment_step", None)
-        
+
         user_id = update.effective_user.id
         owner_id = str(user_id)
         tier_num = context.user_data.get("selected_tier", 1)
         payer_name = context.user_data.get("payer_name", "Valued Customer")
-        
+
         store_name = "Nexa Store"
         if supabase:
             try:
@@ -2993,7 +3013,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
         channel_name, masked_account, _, channel_code = await select_optimal_payout_destination(exact_amount_etb, partner_id=partner_id)
         order_id = f"NEXA-SECURE-{random.randint(1000, 9999)}"
-        
+
         if supabase:
             try:
                 await asyncio.to_thread(
@@ -3028,12 +3048,12 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
             f"2. ክፍያውን ከፈጸሙ በኋላ የሚደርሰውን የቴሌብር SMS ማረጋገጫ (Screenshot) እዚህ ይላኩ።\n"
             f"3. የ AI-OCR ሲስተሙ ስምዎን፣ ስልክ ቁጥርዎን እና የትራንዛክሽን መጠንዎን አረጋግጦ አካውንትዎን ወዲያውኑ ይከፍትልዎታል።"
         )
-        
+
         keyboard = [
             [InlineKeyboardButton(f"📋 ቁጥር ቅዳ: {masked_account}", callback_data=f"copy_acc_{masked_account}")],
             [InlineKeyboardButton("✅ ከፍያለሁ — ደረሰኝ ጫን", callback_data="upload_receipt")]
         ]
-        
+
         await update.effective_message.reply_text(invoice_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
@@ -3092,7 +3112,7 @@ async def startup_event():
     global http_client
     http_client = httpx.AsyncClient(timeout=15.0)
     await telegram_app.initialize()
-    await telegram_app.start() 
+    await telegram_app.start()
     await telegram_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=TELEGRAM_WEBHOOK_SECRET)
 
     asyncio.create_task(run_ai_system_audit_and_heal())
@@ -3120,13 +3140,13 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 @app.post("/tenant-webhook/{bot_token}")
 async def tenant_bot_webhook(bot_token: str, request: Request):
     data = await request.json()
-    
+
     message = data.get("message", {})
     chat_obj = message.get("chat", {})
     chat_id = chat_obj.get("id")
     user_text = message.get("text", "")
     voice_obj = message.get("voice")
-    
+
     user_obj = message.get("from", {})
     full_name = f"{user_obj.get('first_name', '')} {user_obj.get('last_name', '')}".strip()
     if not full_name:
@@ -3140,7 +3160,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         visitor_name = f"@{username}"
     else:
         visitor_name = f"User {chat_id}"
-    
+
     if not chat_id:
         return {"ok": True}
 
@@ -3258,7 +3278,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "ui_theme": store.get("ui_theme", "executive"), "history_messages": history_messages,
         "available_tags": available_tags, "plan_tier": store.get("plan_tier", 1)
     }
-    
+
     return await store_chat_webhook(payload)
 
 
@@ -3282,10 +3302,10 @@ async def analyze_and_upsert_lead(
     analysis_prompt = f"""
     Analyze this customer conversation one-by-one for a business store and extract structured lead intelligence.
     Store Catalog Reference: {inventory_data[:1200]}
-    
+
     Conversation:
     {convo_text}
-    
+
     Return strictly valid JSON with these exact keys:
     {{
         "customer_name": "extracted real name or '{visitor_name}'",
@@ -3393,20 +3413,20 @@ async def store_chat_webhook(payload: dict):
     tags_str = ", ".join(available_tags) if available_tags else "None"
 
     system_prompt = f"""
-    You are an advanced, intelligent AI sales and analytical assistant for {store_name}. 
+    You are an advanced, intelligent AI sales and analytical assistant for {store_name}.
     Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
     Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
     Store Plan Tier: {tier_capabilities['name']} ({tier_capabilities['features']})
-    
+
     Core Directives & Analytical Approach:
     - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
     - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
     - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
     - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
     - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
-    
+
     Available Media Tags: {tags_str}
-    
+
     Live Store Catalog Data:
     {inventory_data}
     """
