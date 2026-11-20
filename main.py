@@ -255,6 +255,30 @@ def safe_escape_html(text: str) -> str:
     )
 
 
+def safe_escape_js_single(text: str) -> str:
+    """Escapes text for safe embedding inside single-quoted JavaScript strings."""
+    if text is None:
+        return ""
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "")
+    )
+
+
+def build_copy_url_keyboard(url: str, extra_rows: list[list[InlineKeyboardButton]] = None) -> InlineKeyboardMarkup:
+    """Builds an inline keyboard with a one-tap copy/open link helper for Nexa URLs."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("📋 ሊንኩን ይቅዱ / ይክፈቱ (Copy / Open URL)", url=url)],
+    ]
+    if extra_rows:
+        rows.extend(extra_rows)
+    return InlineKeyboardMarkup(rows)
+
+
 def normalize_phone_digits(raw_phone: str) -> str:
     """Normalizes Ethiopian/international phone strings into comparable digits."""
     digits = re.sub(r"\D+", "", raw_phone or "")
@@ -1925,25 +1949,25 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
             )
             if s_res.data:
                 s = s_res.data[0]
-                existing_store_info = f"User owns Nexa store '{s.get('store_name')}' (Tier {s.get('plan_tier', 1)})."
-            if ann_res.data:
-                announcements_context = "Recent platform/user updates: " + " | ".join([str(a.get("message", ""))[:80] for a in ann_res.data])
-        except Exception:
-            pass
-
-    history_formatted = "\n".join([f"{h.get('role', 'user')}: {h.get('content', '')}" for h in advice_history[-6:]])
-
+    # IMPORTANT STYLE RULES:
+    # - Do NOT use a stiff "professor/lecture" persona. Sound like a smart, practical, engaging, hook-driven business partner having a real conversation.
+    # - Understand whatever business or question the user brings up and answer directly, clearly, and helpfully.
+    # - Stay aware of legal business considerations where relevant (proper business registration/licensing, tax/receipt compliance, authentic products, transparent customer terms, data/privacy trust) in plain, practical business language—without acting as a formal courtroom lawyer.
+    # - Stay aware of platform features and announcements ({announcements_context or "4-tier AI store bots, Telebirr receipt verification, 25% partner affiliate program, and AI voice/chat lead capture"}).
+    # - Actively invite follow-up questions with an engaging hook (e.g., asking a sharp follow-up question or prompting them to ask whatever is on their mind next).
+    # - Include natural, high-leverage ways to grow revenue using Nexa tools (24/7 AI bot sales via `/register`, zero-capital 25% partner commissions via `/partner`) only when naturally helpful, never forced.
+    # - Write in clear, natural, engaging, grammatically accurate Amharic.
     advisor_prompt = f"""
     You are 'Nexa Elite Business Advisor' (ኔክሳ ኤላይት የንግድ አማካሪ) — a sharp, conversational, hook-driven, and deeply helpful business advisor who understands EVERY type of business, Ethiopian market realities (Addis Ababa & regional trade, ETB, Telebirr, digital commerce, import/local supply chains), legal business compliance, and current platform announcements.
 
     IMPORTANT STYLE RULES:
-    - Do NOT use a stiff "professor/lecture" persona. Sound like a smart, practical, engaging, hook-driven business partner having a real conversation.
+    - Sound like a smart, practical, engaging, hook-driven business partner having a real, respectful conversation.
     - Understand whatever business or question the user brings up and answer directly, clearly, and helpfully.
     - Stay aware of legal business considerations where relevant (proper business registration/licensing, tax/receipt compliance, authentic products, transparent customer terms, data/privacy trust) in plain, practical business language—without acting as a formal courtroom lawyer.
     - Stay aware of platform features and announcements ({announcements_context or "4-tier AI store bots, Telebirr receipt verification, 25% partner affiliate program, and AI voice/chat lead capture"}).
-    - Actively invite follow-up questions with an engaging hook (e.g., asking a sharp follow-up question or prompting them to ask whatever is on their mind next).
+    - Weave natural, high-impact Amharic hook phrases into your response and end with an engaging follow-up hook question (for example: "በጣም የሚገርም ነጥብ ነው! እስቲ ይህን በንግድዎ እንዴት ልንጠቀምበት እንችላለን?", "አንድ ወሳኝ ጥያቄ ላንሳልዎ — አሁን በጣም የሚያስፈልግዎ ደንበኛ ማፍራት ነው ወይስ ትርፍ ማሳደግ?", "እዚህ ላይ አንድ ምስጢር አለ — ምን እንደሆነ ልንገርዎት?").
     - Include natural, high-leverage ways to grow revenue using Nexa tools (24/7 AI bot sales via `/register`, zero-capital 25% partner commissions via `/partner`) only when naturally helpful, never forced.
-    - Write in clear, natural, engaging, grammatically accurate Amharic.
+    - Keep tone polished, courteous, and professional at all times. Write in clear, natural, engaging, grammatically accurate Amharic.
 
     Selected Focus Area: {business_type}
     {existing_store_info}
@@ -2039,7 +2063,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📋 የሙከራ ጊዜ በሥራ ላይ አለ (3 ቀናት)\n"
             f"• የቀረው ጊዜ: {remaining_days} ቀናት\n"
             f"• የሚያበቃበት ጊዜ: {trial_exp.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"• የቀሩ የAI ዕዳዎች: {sub_data['credits_remaining']}"
+            f"• የቀሩ የAI አጠቃቀም ገደቦች: {sub_data['credits_remaining']}"
         )
     else:
         status_text = "⚠️ የሙከራ ጊዜዎ አልቋል — አገልግሎቱ እንዳይቋረጥ አባልነትዎን ያሻሽሉ።"
@@ -2120,11 +2144,12 @@ async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 ያመጡዋቸው አባላት: {referrals} ሰዎች\n"
             f"💰 ያገኙት ጠቅላላ ኮሚሽን (1/4): **{earned:,.2f} ብር**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link — ለመቅዳት ይጫኑ):**\n"
             f"`{ref_link}`\n\n"
             f"💡 ማሳሰቢያ፡ ማንኛውም ሰው በዚህ ሊንክ ገብቶ Nexa አባልነት ሲገዛ፣ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ የቴሌብር ቁጥር ይላካል እንዲሁም በሰርቨራችን ይመዘገባል።"
         )
         keyboard = [
+            [InlineKeyboardButton("📋 የሪፈራል ሊንኩን ይክፈቱ / ይቅዱ", url=ref_link)],
             [InlineKeyboardButton("✏️ የቴሌብር ቁጥር መቀየሪያ", callback_data="change_partner_phone")],
             [InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]
         ]
@@ -2160,6 +2185,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        exclusive_buttons = []
         for idx, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
@@ -2174,7 +2200,8 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bot_token=token_val,
                     store_id=str(store.get("id") or "")
                 )
-                exclusive_link_line = f"• 🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:** `{exclusive_url}`\n"
+                exclusive_link_line = f"• 🔗 **የእርስዎ ብቻ የ Tier 4 Call Link (ለመቅዳት ይጫኑ):** `{exclusive_url}`\n"
+                exclusive_buttons.append([InlineKeyboardButton(f"📋 ሊንክ ይቅዱ ({store['store_name']})", url=exclusive_url)])
             bots_list_text += (
                 f"🤖 **{store['store_name']}**\n"
                 f"• ዕቅድ / ፕላን: {tier_name}\n"
@@ -2184,7 +2211,8 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• ቶከን ቁልፍ: `{masked_token}`\n"
                 f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n\n"
             )
-        await update.effective_message.reply_text(bots_list_text, parse_mode="Markdown")
+        reply_mk = InlineKeyboardMarkup(exclusive_buttons) if exclusive_buttons else None
+        await update.effective_message.reply_text(bots_list_text, reply_markup=reply_mk, parse_mode="Markdown")
     except Exception as e:
         await update.effective_message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
 
@@ -2800,6 +2828,11 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
     tier4_link_section = ""
+    extra_buttons = [
+        [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
+        [InlineKeyboardButton("⚡ የንግድ አማካሪ (/advice)", callback_data="business_advice_menu")],
+        [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
+    ]
     if int(plan_tier) >= 4:
         personal_call_url = build_merchant_exclusive_call_url(
             phone=phone_input,
@@ -2807,10 +2840,11 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
             store_id=store_name
         )
         tier4_link_section = (
-            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (Exclusive Link):**\n"
+            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (ለመቅዳት ሊንኩን ይጫኑ):**\n"
             f"`{personal_call_url}`\n"
             f"_(ደንበኞችዎ ይህን ሊንክ ሲጫኑ የእርስዎን ካታሎግ ብቻ ያነጋግራሉ — ከሌሎች ቦቶች ጋር አይቀላቀልም!)_\n"
         )
+        extra_buttons.insert(0, [InlineKeyboardButton("📋 የ Tier 4 Call ሊንክ ይክፈቱ / ይቅዱ", url=personal_call_url)])
 
     cool_advert_text = (
         f"🤖 **የንግድ መደብር ቦትዎ በተሳካ ሁኔታ ተፈጥሯል!**\n\n"
@@ -2822,13 +2856,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
 
-    keyboard = [
-        [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
-        [InlineKeyboardButton("⚡ የንግድ አማካሪ (/advice)", callback_data="business_advice_menu")],
-        [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")]
-    ]
-
-    await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await update.effective_message.reply_text(cool_advert_text, reply_markup=InlineKeyboardMarkup(extra_buttons), parse_mode="Markdown")
     return ConversationHandler.END
 
 
@@ -3730,10 +3758,10 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
             f"✅ **እንኳን ደስ አለዎት! አሁን ኦፊሴላዊ የ Nexa Partner (Affiliate) ነዎት!**\n\n"
             f"📞 የተመዘገበ የቴሌብር ቁጥር: `{telebirr_phone}`\n"
             f"💰 ኮሚሽን: ማንኛውም ሰው በእርስዎ ሊንክ ገብቶ ሲመዝገብ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ ይገባል።\n\n"
-            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link):**\n"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link — ለመቅዳት ይጫኑ):**\n"
             f"`{ref_link}`"
         )
-        await update.effective_message.reply_text(success_msg, parse_mode="Markdown")
+        await update.effective_message.reply_text(success_msg, reply_markup=build_copy_url_keyboard(ref_link), parse_mode="Markdown")
         return
 
     # 4. Payment Verification Flow
