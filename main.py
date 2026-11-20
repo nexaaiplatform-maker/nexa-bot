@@ -270,9 +270,10 @@ def safe_escape_js_single(text: str) -> str:
 
 
 def build_copy_url_keyboard(url: str, extra_rows: list[list[InlineKeyboardButton]] = None) -> InlineKeyboardMarkup:
-    """Builds an inline keyboard with a one-tap copy/open link helper for Nexa URLs."""
+    """Builds an inline keyboard with a copyable URL alert helper so users can copy the exact link cleanly."""
+    callback_tag = f"copy_url_alert_{abs(hash(url)) % 100000000}"
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("📋 ሊንኩን ይቅዱ / ይክፈቱ (Copy / Open URL)", url=url)],
+        [InlineKeyboardButton("📋 ሊንኩን ለመቅዳት ይጫኑ (Copy Link)", callback_data=callback_tag)],
     ]
     if extra_rows:
         rows.extend(extra_rows)
@@ -1966,21 +1967,22 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
     )
 
     advisor_prompt = f"""
-    You are 'Nexa Elite Business Advisor' (ኔክሳ ኤላይት የንግድ አማካሪ) — a sharp, conversational, hook-driven, and deeply helpful business advisor who understands EVERY type of business, Ethiopian market realities (Addis Ababa & regional trade, ETB, Telebirr, digital commerce, import/local supply chains), legal business compliance, and current platform announcements.
+    You are 'Nexa Elite Business Advisor' (ኔክሳ ኤላይት የንግድ አማካሪ) — a polished, professional, conversational, hook-driven, and deeply helpful business advisor who understands EVERY type of business, Ethiopian market realities (Addis Ababa & regional trade, ETB, Telebirr, digital commerce, import/local supply chains), legal business compliance, and current platform announcements.
 
-    IMPORTANT STYLE RULES:
-    - Sound like a smart, practical, engaging, hook-driven business partner having a real, respectful conversation.
-    - Understand whatever business or question the user brings up and answer directly, clearly, and helpfully.
-    - Stay aware of legal business considerations where relevant (proper business registration/licensing, tax/receipt compliance, authentic products, transparent customer terms, data/privacy trust) in plain, practical business language—without acting as a formal courtroom lawyer.
-    - Stay aware of platform features and announcements ({announcements_context or "4-tier AI store bots, Telebirr receipt verification, 25% partner affiliate program, and AI voice/chat lead capture"}).
-    - Weave natural, high-impact Amharic hook phrases into your response and end with an engaging follow-up hook question (for example: "በጣም የሚገርም ነጥብ ነው! እስቲ ይህን በንግድዎ እንዴት ልንጠቀምበት እንችላለን?", "አንድ ወሳኝ ጥያቄ ላንሳልዎ — አሁን በጣም የሚያስፈልግዎ ደንበኛ ማፍራት ነው ወይስ ትርፍ ማሳደግ?", "እዚህ ላይ አንድ ምስጢር አለ — ምን እንደሆነ ልንገርዎት?").
-    - Include natural, high-leverage ways to grow revenue using Nexa tools (24/7 AI bot sales via `/register`, zero-capital 25% partner commissions via `/partner`) only when naturally helpful, never forced.
-    - Keep tone polished, courteous, and professional at all times. Write in clear, natural, engaging, grammatically accurate Amharic.
+    IMPORTANT STYLE AND LANGUAGE RULES:
+    - Write strictly in polished, formal-yet-warm, eloquent, natural, grammatically accurate, and spelling-error-free Ethiopian Amharic (በጣም የተስተካከለ፣ ፕሮፌሽናል፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ አማርኛ).
+    - Do not mix random English sentences or broken filler phrases; keep terminology clear and professional in Amharic.
+    - Sound like an experienced, trustworthy business advisor having a respectful, engaging conversation.
+    - Answer whatever business or question the user raises directly, clearly, and practically.
+    - Address relevant legal and regulatory business considerations (proper business licensing, tax and receipt compliance, authentic goods/services, transparent customer terms, and data trust) clearly and professionally in plain Amharic, without acting as a formal courtroom lawyer.
+    - Incorporate current platform capabilities and announcements ({announcements_context or "ባለአራት ደረጃ የ AI መደብር ቦቶች፣ የቴሌብር ደረሰኝ ማረጋገጫ፣ የ25% አጋርነት ፕሮግራም እና የ AI የደንበኛ መረጃ አሰባሰብ"}).
+    - Weave natural, high-impact Amharic hook phrases into your response and conclude with an engaging follow-up hook question (ለምሳሌ፡- "በጣም ጠቃሚ እና ወሳኝ ነጥብ ነው! ይህን እድል በንግድዎ እንዴት በብቃት ልንተገብረው እንችላለን?", "አንድ ወሳኝ ጥያቄ ላንሳልዎ — በአሁኑ ወቅት ለንግድዎ ቅድሚያ የሚሰጠው አዲስ ደንበኛ ማፍራት ነው ወይስ የትርፍ ህዳግ ማሳደግ?", "እዚህ ላይ አንድ በጣም ውጤታማ አሠራር አለ — ምን እንደሆነ ላካፍልዎት?").
+    - Mention Nexa revenue tools (`/register` for automated AI sales bots, `/partner` for the 25% partner program) naturally and professionally only when directly relevant.
 
     Selected Focus Area: {business_type}
     {existing_store_info}
     Recent Conversation:
-    {history_formatted or "None yet"}
+    {history_formatted or "ምንም የቀድሞ ውይይት የለም"}
 
     Current User Message: {user_situation}
     """
@@ -2152,12 +2154,13 @@ async def partner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 ያመጡዋቸው አባላት: {referrals} ሰዎች\n"
             f"💰 ያገኙት ጠቅላላ ኮሚሽን (1/4): **{earned:,.2f} ብር**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ማገናኛ (Referral Link — ለመቅዳት ይጫኑ):**\n"
+            f"🔗 **የእርስዎ ልዩ የማስታወቂያ ሊንክ (ለመቅዳት በሊንኩ ላይ ይጫኑ):**\n"
             f"`{ref_link}`\n\n"
-            f"💡 ማሳሰቢያ፡ ማንኛውም ሰው በዚህ ሊንክ ገብቶ Nexa አባልነት ሲገዛ፣ ከክፍያው **1/4 (25%)** በቀጥታ ወደ እርስዎ የቴሌብር ቁጥር ይላካል እንዲሁም በሰርቨራችን ይመዘገባል።"
+            f"💡 ማሳሰቢያ፡ ማንኛውም ደንበኛ በዚህ ሊንክ ገብቶ Nexa አባልነት ሲገዛ፣ ከክፍያው **1/4 (25%)** ኮሚሽን በአስተማማኝ ሁኔታ ይመዘገብልዎታል።"
         )
+        copy_alert_key = f"copy_url_alert_{abs(hash(ref_link)) % 100000000}"
         keyboard = [
-            [InlineKeyboardButton("📋 የሪፈራል ሊንኩን ይክፈቱ / ይቅዱ", url=ref_link)],
+            [InlineKeyboardButton("📋 ሊንኩን ለመቅዳት ይጫኑ (Copy Link)", callback_data=copy_alert_key)],
             [InlineKeyboardButton("✏️ የቴሌብር ቁጥር መቀየሪያ", callback_data="change_partner_phone")],
             [InlineKeyboardButton("📊 ዋና ገጽ ይመለሱ", callback_data="start_menu")]
         ]
@@ -2209,7 +2212,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     store_id=str(store.get("id") or "")
                 )
                 exclusive_link_line = f"• 🔗 **የእርስዎ ብቻ የ Tier 4 Call Link (ለመቅዳት ይጫኑ):** `{exclusive_url}`\n"
-                exclusive_buttons.append([InlineKeyboardButton(f"📋 ሊንክ ይቅዱ ({store['store_name']})", url=exclusive_url)])
+                exclusive_buttons.append([InlineKeyboardButton(f"📋 ሊንክ ይቅዱ ({store['store_name']})", callback_data=f"copy_url_alert_{abs(hash(exclusive_url)) % 100000000}")])
             bots_list_text += (
                 f"🤖 **{store['store_name']}**\n"
                 f"• ዕቅድ / ፕላን: {tier_name}\n"
@@ -2848,11 +2851,11 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
             store_id=store_name
         )
         tier4_link_section = (
-            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (ለመቅዳት ሊንኩን ይጫኑ):**\n"
+            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (ለመቅዳት በሊንኩ ላይ ይጫኑ):**\n"
             f"`{personal_call_url}`\n"
-            f"_(ደንበኞችዎ ይህን ሊንክ ሲጫኑ የእርስዎን ካታሎግ ብቻ ያነጋግራሉ — ከሌሎች ቦቶች ጋር አይቀላቀልም!)_\n"
+            f"_(ደንበኞችዎ ይህን ሊንክ ሲጠቀሙ የእርስዎን መደብር ካታሎግ ብቻ ያገኛሉ — ከሌሎች መደብሮች ጋር አይቀላቀልም።)_\n"
         )
-        extra_buttons.insert(0, [InlineKeyboardButton("📋 የ Tier 4 Call ሊንክ ይክፈቱ / ይቅዱ", url=personal_call_url)])
+        extra_buttons.insert(0, [InlineKeyboardButton("📋 የ Tier 4 ሊንክ ለመቅዳት ይጫኑ", callback_data=f"copy_url_alert_{abs(hash(personal_call_url)) % 100000000}")])
 
     cool_advert_text = (
         f"🤖 **የንግድ መደብር ቦትዎ በተሳካ ሁኔታ ተፈጥሯል!**\n\n"
@@ -3472,6 +3475,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("copy_acc_"):
         acc_num = query.data.replace("copy_acc_", "")
         await query.answer(text=f"የሂሳብ ቁጥር ተገልብጧል: {acc_num}", show_alert=True)
+    elif query.data.startswith("copy_url_alert_"):
+        msg_text = query.message.text if query.message else ""
+        url_match = re.search(r"https?://\S+", msg_text)
+        target_url = url_match.group(0).strip("`*") if url_match else "ሊንኩን በመልዕክቱ ውስጥ በመጫን ይቅዱ"
+        await query.answer(text=f"📋 ሊንክ: {target_url}", show_alert=True)
     elif query.data.startswith("select_lead_bot_"):
         bot_token = query.data.replace("select_lead_bot_", "")
         store_name = "Selected Store"
@@ -3886,9 +3894,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         "The user might be asking about any business, legal compliance, strategy, or might have registered a bot earlier and forgotten what to do. "
         "If they ask about business growth, making money, pricing, profit, legal/licensing/tax business practices, or business strategy, classify as 'advice'. "
         "Otherwise guide them clearly on what to click or type (e.g. /advice, /mybots, /leads, /summary, /support, /register, /upgrade, /partner, /setphone). "
-        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly eloquent, natural, grammatically flawless, and spelling-accurate Amharic. "
+        "CRITICAL AMHARIC RULE: All Amharic responses ('reply') MUST be written in highly polished, professional, eloquent, natural, grammatically flawless, and spelling-accurate Ethiopian Amharic. Do not use English filler or awkward phrasing. "
         "Classify into: 'advice', 'mybots', 'leads', 'summary', 'weekly', 'support', 'register', 'upgrade', 'partner', 'setphone', 'general'. "
-        'Return strictly valid JSON: {"intent": "category", "reply": "helpful response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
+        'Return strictly valid JSON: {"intent": "category", "reply": "helpful, professional response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! የንግድ እና የስትራቴጂ ምክር ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
     if GROQ_API_KEY:
