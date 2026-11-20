@@ -1949,14 +1949,22 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
             )
             if s_res.data:
                 s = s_res.data[0]
-    # IMPORTANT STYLE RULES:
-    # - Do NOT use a stiff "professor/lecture" persona. Sound like a smart, practical, engaging, hook-driven business partner having a real conversation.
-    # - Understand whatever business or question the user brings up and answer directly, clearly, and helpfully.
-    # - Stay aware of legal business considerations where relevant (proper business registration/licensing, tax/receipt compliance, authentic products, transparent customer terms, data/privacy trust) in plain, practical business language—without acting as a formal courtroom lawyer.
-    # - Stay aware of platform features and announcements ({announcements_context or "4-tier AI store bots, Telebirr receipt verification, 25% partner affiliate program, and AI voice/chat lead capture"}).
-    # - Actively invite follow-up questions with an engaging hook (e.g., asking a sharp follow-up question or prompting them to ask whatever is on their mind next).
-    # - Include natural, high-leverage ways to grow revenue using Nexa tools (24/7 AI bot sales via `/register`, zero-capital 25% partner commissions via `/partner`) only when naturally helpful, never forced.
-    # - Write in clear, natural, engaging, grammatically accurate Amharic.
+                existing_store_info = (
+                    f"Existing Nexa Store: {s.get('store_name', 'Store')} "
+                    f"(Tier {s.get('plan_tier', 1)})\n"
+                    f"Catalog Snippet: {str(s.get('inventory_data') or '')[:400]}"
+                )
+            if ann_res.data:
+                ann_lines = [f"- {str(item.get('message', '')).strip()}" for item in ann_res.data if item.get("message")]
+                if ann_lines:
+                    announcements_context = "\n".join(ann_lines)
+        except Exception as e:
+            logger.error(f"Advisor context fetch error: {e}")
+
+    history_formatted = "\n".join(
+        [f"{m.get('role', 'user')}: {m.get('content', '')}" for m in advice_history[-6:]]
+    )
+
     advisor_prompt = f"""
     You are 'Nexa Elite Business Advisor' (ኔክሳ ኤላይት የንግድ አማካሪ) — a sharp, conversational, hook-driven, and deeply helpful business advisor who understands EVERY type of business, Ethiopian market realities (Addis Ababa & regional trade, ETB, Telebirr, digital commerce, import/local supply chains), legal business compliance, and current platform announcements.
 
