@@ -43,6 +43,7 @@ ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
 NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
+NEXA_CALL_BASE_URL = os.getenv("NEXA_CALL_BASE_URL", "https://nexa-ai-call.netlify.app").strip().rstrip("/")
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
@@ -58,6 +59,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://admin-nexa-telegram-bot-dashboard.netlify.app",
+        "https://nexa-ai-call.netlify.app",
         "https://nexa-bot-f5al.onrender.com",
         "http://localhost:3000",
         "http://localhost:8000",
@@ -261,6 +263,188 @@ def normalize_phone_digits(raw_phone: str) -> str:
     return digits
 
 
+def build_merchant_exclusive_call_url(phone: str = "", bot_token: str = "", store_id: str = "") -> str:
+    """Builds a dedicated call link scoped strictly to one merchant's phone/bot/store."""
+    clean_phone = normalize_phone_digits(phone)
+    if clean_phone:
+        return f"{NEXA_CALL_BASE_URL}/?phone={clean_phone}"
+    if store_id:
+        return f"{NEXA_CALL_BASE_URL}/?store={store_id}"
+    if bot_token:
+        return f"{NEXA_CALL_BASE_URL}/?bot={bot_token}"
+    return f"{NEXA_CALL_BASE_URL}/"
+
+
+async def resolve_single_merchant(phone: str = "", bot_token: str = "", store_id: str = "") -> dict | None:
+    """Resolves a single merchant record strictly by phone, bot_token, or store_id."""
+    if not supabase:
+        return None
+    try:
+        if bot_token:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("bot_token", bot_token.strip()).limit(1).execute()
+            )
+            if res.data:
+                return res.data[0]
+        if store_id:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("id", store_id.strip()).limit(1).execute()
+            )
+            if res.data:
+                return res.data[0]
+        if phone:
+            matched = await lookup_registered_phone_stores(phone)
+            if matched:
+                matched.sort(key=lambda s: int(s.get("plan_tier") or 1), reverse=True)
+                return matched[0]
+    except Exception as e:
+        logger.error(f"Single merchant resolution error: {e}")
+    return None
+
+
+@app.get("/api/public-store")
+async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: str = ""):
+    """Returns safe, non-secret details for one merchant's AI inventory call page."""
+    store = await resolve_single_merchant(phone=phone, bot_token=bot_token, store_id=store_id)
+    if not store:
+        return {"status": "error", "message": "Merchant store not found"}
+
+    tier_num = int(store.get("plan_tier") or 1)
+    voice_active = store.get("voice_ai_active", True) is not False
+    bus_phone = store.get("business_phone") or store.get("owner_phone") or normalize_phone_digits(phone)
+
+    if tier_num < 4:
+        return {
+            "status": "error",
+            "message": "This merchant is not yet on Tier 4 (AI Voice Concierge)."
+        }
+    if not voice_active:
+        return {
+            "status": "error",
+            "message": "Voice AI is currently paused by this merchant."
+        }
+
+    return {
+        "status": "success",
+        "store": {
+            "id": store.get("id"),
+            "store_name": store.get("store_name", "Nexa Store"),
+            "business_phone": bus_phone,
+            "plan_tier": tier_num,
+            "voice_ai_active": True,
+            "call_url": build_merchant_exclusive_call_url(
+                phone=bus_phone,
+                bot_token=store.get("bot_token", ""),
+                store_id=str(store.get("id") or "")
+            )
+        }
+    }
+
+
+@app.post("/api/web-voice-call")
+async def web_voice_call_turn(request: Request):
+    """Answers a caller on a merchant's exclusive call link using only that store's catalog and captures leads."""
+    body = await request.json()
+    phone = str(body.get("phone") or "").strip()
+    bot_token_param = str(body.get("bot_token") or "").strip()
+    store_id_param = str(body.get("store_id") or "").strip()
+    spoken_text = str(body.get("spoken_text") or body.get("message") or "").strip()
+    lang = str(body.get("language") or "amharic").strip().lower()
+    caller_name_input = str(body.get("caller_name") or body.get("visitor_name") or "").strip()
+    caller_phone_input = str(body.get("caller_phone") or body.get("phone_number") or "").strip()
+    random_log_id = str(body.get("call_log_id") or "").strip()
+    history_messages = body.get("history") or []
+
+    store = await resolve_single_merchant(phone=phone, bot_token=bot_token_param, store_id=store_id_param)
+    if not store:
+        return {"status": "error", "message": "Merchant not found"}
+
+    tier_num = int(store.get("plan_tier") or 1)
+    if tier_num < 4:
+        return {"status": "error", "message": "Tier 4 is required for AI Voice Concierge"}
+    if store.get("voice_ai_active") is False:
+        return {"status": "error", "message": "Voice AI is paused"}
+
+    merchant_bot_token = str(store.get("bot_token") or "")
+    store_name = str(store.get("store_name") or "Nexa Store")
+    inventory_data = str(store.get("inventory_data") or "")
+    merchant_phone = str(store.get("business_phone") or store.get("owner_phone") or phone)
+
+    lang_directive = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ አማርኛ ተጠቀም።",
+        "english": "Respond clearly, politely, and concisely in English.",
+        "oromo": "Afaan Oromootiin gabaabsee ifaan deebisi."
+    }.get(lang, "በጣም የዳበረ እና ትክክለኛ አማርኛ ተጠቀም።")
+
+    system_prompt = f"""
+    You are the AI Voice Concierge for {store_name} ONLY.
+    Answer strictly from THIS store's catalog below. Do not mention or mix other stores.
+    Language Rule: {lang_directive}
+    Keep replies concise and natural for a live phone call (2-4 sentences).
+    Politely ask for the caller's name, phone number, and what product/service they need if they haven't shared them yet.
+
+    Store Phone: {merchant_phone}
+    Store Catalog:
+    {inventory_data}
+    """
+
+    reply_text = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ? ስምዎን እና ስልክ ቁጥርዎንም ቢነግሩኝ ደስ ይለኛል።"
+    if GROQ_API_KEY:
+        try:
+            reply_text = await generate_groq_text(
+                prompt=spoken_text or "Greet the caller and ask how we can help.",
+                system_instruction=system_prompt,
+                history_messages=history_messages[-6:],
+                temperature=0.5,
+                max_output_tokens=280,
+            )
+        except Exception as e:
+            logger.error(f"Web voice call Groq error: {e}")
+
+    extracted_phone_match = re.search(r"(\+251[79]\d{8}|0[79]\d{8})", f"{caller_phone_input} {spoken_text}".replace(" ", ""))
+    final_phone = extracted_phone_match.group(0) if extracted_phone_match else caller_phone_input
+
+    visitor_label = caller_name_input or (f"Caller ({final_phone})" if final_phone else f"Call Visitor ({random_log_id or 'Web'})")
+    visitor_id = f"call_{normalize_phone_digits(final_phone) or random_log_id or 'session'}"
+
+    if supabase and merchant_bot_token:
+        try:
+            lead_row = {
+                "bot_token": merchant_bot_token,
+                "visitor_telegram_id": visitor_id,
+                "visitor_name": visitor_label,
+                "interest_summary": f"[TIER 4 CALL] {spoken_text[:120]} -> {reply_text[:120]}",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            if final_phone:
+                lead_row["phone_number"] = final_phone
+            await asyncio.to_thread(
+                lambda: supabase.table("leads").upsert(
+                    lead_row, on_conflict="bot_token,visitor_telegram_id"
+                ).execute()
+            )
+            asyncio.create_task(
+                analyze_and_upsert_lead(
+                    bot_token=merchant_bot_token,
+                    chat_id=visitor_id,
+                    visitor_name=visitor_label,
+                    user_text=f"{caller_name_input} {final_phone} {spoken_text}".strip(),
+                    history_messages=history_messages,
+                    inventory_data=inventory_data
+                )
+            )
+        except Exception as e:
+            logger.error(f"Web voice lead save error: {e}")
+
+    return {
+        "status": "success",
+        "store_name": store_name,
+        "ai_reply_text": reply_text,
+        "extracted_phone": final_phone or None,
+        "extracted_name": caller_name_input or None,
+    }
+
+
 async def lookup_registered_phone_stores(raw_phone: str) -> list[dict]:
     """Finds Nexa stores matching a registered business or owner phone number."""
     if not supabase:
@@ -437,8 +621,6 @@ async def generate_live_call_reply(session: CallSession, spoken_text: str) -> st
 
 async def synthesize_call_speech_bytes(reply_text: str) -> bytes:
     """Hook for converting AI reply text into telephony audio bytes (WAV/PCM/mu-law)."""
-    # Plug in your TTS provider (such as ElevenLabs, Azure Speech, Google TTS, or self-hosted TTS)
-    # and return raw audio bytes matching your telephony stream format.
     return b""
 
 
@@ -1425,9 +1607,25 @@ async def admin_payment_action_json(data: ReviewActionJSONModel, x_admin_passwor
                 reference_id=f"REV-{review_id}"
             )
             if http_client and TELEGRAM_BOT_TOKEN:
+                tier4_msg = ""
+                if plan_tier >= 4:
+                    st_phone = ""
+                    st_tok = ""
+                    try:
+                        st_q = await asyncio.to_thread(
+                            lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", user_id).limit(1).execute()
+                        )
+                        if st_q.data:
+                            st_phone = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                            st_tok = st_q.data[0].get("bot_token") or ""
+                    except Exception:
+                        pass
+                    exclusive_url = build_merchant_exclusive_call_url(phone=st_phone, bot_token=st_tok)
+                    tier4_msg = f"\n\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{exclusive_url}`"
                 await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
                     "chat_id": int(user_id),
-                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
+                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።{tier4_msg}",
+                    "parse_mode": "Markdown"
                 })
         else:
             await asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "rejected"}).eq("id", review_id).execute())
@@ -1478,9 +1676,25 @@ async def admin_payment_action(
                 reference_id=f"REV-{review_id}"
             )
             if http_client and TELEGRAM_BOT_TOKEN:
+                tier4_msg = ""
+                if plan_tier >= 4:
+                    st_phone = ""
+                    st_tok = ""
+                    try:
+                        st_q = await asyncio.to_thread(
+                            lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", str(user_id)).limit(1).execute()
+                        )
+                        if st_q.data:
+                            st_phone = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                            st_tok = st_q.data[0].get("bot_token") or ""
+                    except Exception:
+                        pass
+                    exclusive_url = build_merchant_exclusive_call_url(phone=st_phone, bot_token=st_tok)
+                    tier4_msg = f"\n\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{exclusive_url}`"
                 await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
                     "chat_id": int(user_id),
-                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።"
+                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።{tier4_msg}",
+                    "parse_mode": "Markdown"
                 })
         else:
             await asyncio.to_thread(lambda: supabase.table("manual_review_queue").update({"status": "rejected"}).eq("id", review_id).execute())
@@ -1939,7 +2153,7 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("store_name, bot_token, ui_theme, plan_tier, business_phone, voice_ai_active").eq("owner_telegram_id", owner_id).execute()
+            lambda: supabase.table("stores").select("id, store_name, bot_token, ui_theme, plan_tier, business_phone, owner_phone, voice_ai_active").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
@@ -1951,12 +2165,21 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
             tier_num = store.get("plan_tier", 1)
             tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
-            bus_phone = store.get("business_phone") or "አልተመዘገበም ❌"
+            bus_phone = store.get("business_phone") or store.get("owner_phone") or "አልተመዘገበም ❌"
             voice_status = "🟢 በሥራ ላይ (Active)" if store.get("voice_ai_active", True) else "🛑 ቆሟል (Paused)"
+            exclusive_link_line = ""
+            if int(tier_num) >= 4:
+                exclusive_url = build_merchant_exclusive_call_url(
+                    phone=bus_phone if bus_phone != "አልተመዘገበም ❌" else "",
+                    bot_token=token_val,
+                    store_id=str(store.get("id") or "")
+                )
+                exclusive_link_line = f"• 🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:** `{exclusive_url}`\n"
             bots_list_text += (
                 f"🤖 **{store['store_name']}**\n"
                 f"• ዕቅድ / ፕላን: {tier_name}\n"
                 f"• የንግድ ስልክ ቁጥር: `{bus_phone}`\n"
+                f"{exclusive_link_line}"
                 f"• የድምጽ ስልክ ረዳት: {voice_status}\n"
                 f"• ቶከን ቁልፍ: `{masked_token}`\n"
                 f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n\n"
@@ -2576,12 +2799,26 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return ConversationHandler.END
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+    tier4_link_section = ""
+    if int(plan_tier) >= 4:
+        personal_call_url = build_merchant_exclusive_call_url(
+            phone=phone_input,
+            bot_token=bot_token,
+            store_id=store_name
+        )
+        tier4_link_section = (
+            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (Exclusive Link):**\n"
+            f"`{personal_call_url}`\n"
+            f"_(ደንበኞችዎ ይህን ሊንክ ሲጫኑ የእርስዎን ካታሎግ ብቻ ያነጋግራሉ — ከሌሎች ቦቶች ጋር አይቀላቀልም!)_\n"
+        )
+
     cool_advert_text = (
         f"🤖 **የንግድ መደብር ቦትዎ በተሳካ ሁኔታ ተፈጥሯል!**\n\n"
         f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በዘመናዊ የ AI ሻጭ ረዳት ተዋቅሯል።\n"
         f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n\n"
+        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n"
+        f"{tier4_link_section}\n"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
 
@@ -3084,11 +3321,25 @@ async def sync_tier(data: TierSyncModel, x_admin_password: str = Header(None)):
     if TELEGRAM_BOT_TOKEN:
         try:
             tier_name = TIER_CONFIG.get(tier, TIER_CONFIG[1])["name"] if tier > 0 else "Free Tier (Level 0)"
+            tier4_url_block = ""
+            if tier >= 4 and supabase:
+                try:
+                    st_q = await asyncio.to_thread(
+                        lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", user_id_str).limit(1).execute()
+                    )
+                    if st_q.data:
+                        p_val = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                        t_val = st_q.data[0].get("bot_token") or ""
+                        ex_url = build_merchant_exclusive_call_url(phone=p_val, bot_token=t_val)
+                        tier4_url_block = f"\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{ex_url}`\n"
+                except Exception:
+                    pass
             alert_text = (
                 f"⚡ **የአካውንትዎ Tier እና የቆይታ ጊዜ በአስተዳዳሪው ተሻሽሏል!**\n\n"
                 f"• አዲስ ዕቅድ: **{tier_name} (Level {tier})**\n"
                 f"• የቆይታ ጊዜ: **{months} ወር(ዎች)**\n"
-                f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n\n"
+                f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n"
+                f"{tier4_url_block}\n"
                 f"🚀 አሁን የ Nexa AI አገልግሎቶች በአዲሱ ደረጃ በሥራ ላይ ውለዋል!"
             )
             async with httpx.AsyncClient(timeout=10.0) as client:
