@@ -109,7 +109,7 @@ TIER_CONFIG = {
     },
 }
 
-# Initialize Clients
+# Initialize Supabase and Groq Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 if not supabase:
     logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
@@ -1201,6 +1201,7 @@ async def admin_dashboard(pwd: str = ""):
     subs_map = {str(s["user_id"]): s for s in subs_data}
     now = datetime.now(timezone.utc)
     safe_pwd = safe_escape_html(pwd)
+    safe_js_pwd = safe_escape_js_single(pwd)
 
     reviews_html = ""
     for r in manual_reviews:
@@ -1238,6 +1239,8 @@ async def admin_dashboard(pwd: str = ""):
         t_status = t.get("status", "open")
         status_lbl = '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400">Resolved</span>' if t_status == "resolved" else '<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400">Open Ticket</span>'
         reply_txt = safe_escape_html(t.get("admin_reply") or "No reply yet")
+        js_tid = safe_escape_js_single(t.get("id"))
+        js_uid = safe_escape_js_single(t.get("user_id"))
         tickets_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
             <td class="p-4 font-mono text-xs text-slate-400">{safe_escape_html(t.get('user_id'))}</td>
@@ -1245,7 +1248,7 @@ async def admin_dashboard(pwd: str = ""):
             <td class="p-4 text-slate-400 text-xs italic max-w-xs">{reply_txt}</td>
             <td class="p-4">{status_lbl}</td>
             <td class="p-4">
-                <button onclick="openSupportModal('{safe_escape_html(t.get('id'))}', '{safe_escape_html(t.get('user_id'))}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reply ✉️</button>
+                <button onclick="openSupportModal('{js_tid}', '{js_uid}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Reply ✉️</button>
             </td>
         </tr>
         """
@@ -1278,6 +1281,8 @@ async def admin_dashboard(pwd: str = ""):
 
         b_tok = str(s.get("bot_token", ""))
         store_nm = str(s.get("store_name", ""))
+        js_oid = safe_escape_js_single(owner_id)
+        js_snm = safe_escape_js_single(store_nm)
         stores_html += f"""
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
             <td class="p-4 font-semibold text-white">{safe_escape_html(store_nm)}</td>
@@ -1287,7 +1292,7 @@ async def admin_dashboard(pwd: str = ""):
             <td class="p-4">{badge}</td>
             <td class="p-4 flex items-center gap-2">
                 <a href="/admin/chats/{safe_escape_html(b_tok)}?pwd={safe_pwd}" class="text-blue-400 hover:underline font-semibold text-xs">Inspect 💬</a>
-                <button onclick="openSyncModal('{safe_escape_html(owner_id)}', '{safe_escape_html(store_nm)}', {int(s.get('plan_tier', 1))})" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-semibold">Sync Tier ⚡</button>
+                <button onclick="openSyncModal('{js_oid}', '{js_snm}', {int(s.get('plan_tier', 1))})" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-semibold">Sync Tier ⚡</button>
             </td>
         </tr>
         """
@@ -1444,6 +1449,8 @@ async def admin_dashboard(pwd: str = ""):
         </div>
 
         <script>
+            const ADMIN_PWD = "{safe_js_pwd}";
+
             function openSupportModal(ticketId, userId) {{
                 document.getElementById("supportTicketId").value = ticketId;
                 document.getElementById("supportUserId").value = userId;
@@ -1465,7 +1472,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/support-reply", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: "{safe_pwd}" }})
+                        body: JSON.stringify({{ ticket_id: ticketId, user_id: userId, reply: replyText, pwd: ADMIN_PWD }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
@@ -1501,7 +1508,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/sync-tier", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: "{safe_pwd}" }})
+                        body: JSON.stringify({{ user_id: userId, plan_tier: tier, months: months, pwd: ADMIN_PWD }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
@@ -1526,7 +1533,7 @@ async def admin_dashboard(pwd: str = ""):
                     const resp = await fetch("/admin/broadcast", {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ message: msg, pwd: "{safe_pwd}" }})
+                        body: JSON.stringify({{ message: msg, pwd: ADMIN_PWD }})
                     }});
                     const data = await resp.json();
                     if (data.status === "success") {{
