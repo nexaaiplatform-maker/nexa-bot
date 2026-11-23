@@ -125,6 +125,19 @@ if not GROQ_API_KEY:
 if not ADDIS_API_KEY:
     logger.warning("⚠️ ADDIS_API_KEY is missing! Addis AI Amharic TTS/STT will be disabled until configured on Render.")
 
+# Master Telegram Bot Application & Shared HTTP Client
+telegram_app: Application | None = (
+    Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(15).write_timeout(15).build()
+    if TELEGRAM_BOT_TOKEN
+    else None
+)
+if not telegram_app:
+    logger.warning("⚠️ TELEGRAM_BOT_TOKEN is missing! Master Telegram bot is disabled.")
+http_client: httpx.AsyncClient | None = None
+
+# Onboarding Conversation States
+STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN, STORE_PHONE, CHANGE_PHONE = range(8)
+
 
 def _groq_headers() -> dict:
     """Builds authorization headers for Groq API requests."""
@@ -406,20 +419,6 @@ async def generate_groq_text(
     finally:
         if owns_client:
             await client.aclose()
-
-
-# Master Telegram Bot Application
-telegram_app: Application | None = (
-    Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(15).write_timeout(15).build()
-    if TELEGRAM_BOT_TOKEN
-    else None
-)
-if not telegram_app:
-    logger.warning("⚠️ TELEGRAM_BOT_TOKEN is missing! Master Telegram bot is disabled.")
-http_client: httpx.AsyncClient | None = None
-
-# Onboarding Conversation States
-STORE_NAME, INDUSTRY, UI_THEME, PLAN_TIER, INVENTORY, BOT_TOKEN, STORE_PHONE, CHANGE_PHONE = range(8)
 
 
 # -------------------------------------------------------------------
@@ -3174,7 +3173,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በዘመናዊ የ AI ሻጭ ረዳት ተዋቅሯል።\n"
         f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የድምጽ ስልክ ቁጥር: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n"
+        f"• የድምጽ ስልክ ረዳት: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n"
         f"{tier4_link_section}\n"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
