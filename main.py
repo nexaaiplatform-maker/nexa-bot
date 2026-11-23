@@ -493,8 +493,13 @@ async def synthesize_addis_speech_bytes(
             return bytes(dl.content), dl_type
 
         return b"", "audio/mpeg"
+    except httpx.HTTPStatusError as e:
+        # Log provider status and a short response excerpt, never request headers or API keys.
+        response_excerpt = (e.response.text or "")[:500] if e.response is not None else ""
+        logger.error("Addis TTS provider returned HTTP %s: %s", e.response.status_code if e.response is not None else "unknown", response_excerpt)
+        return b"", "audio/mpeg"
     except Exception as e:
-        logger.error("External operation failed: %s", type(e).__name__)
+        logger.error("Addis TTS request failed: %s", type(e).__name__)
         return b"", "audio/mpeg"
     finally:
         if owns_client:
