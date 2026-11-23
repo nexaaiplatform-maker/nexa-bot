@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Form, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, HTTPException, Form, Header, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -39,6 +39,11 @@ GROQ_TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile").strip(
 GROQ_AUDIO_MODEL = os.getenv("GROQ_AUDIO_MODEL", "whisper-large-v3").strip()
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
+
+# Addis AI Speech & Language Configuration (Loaded securely from Render Env Vars)
+ADDIS_API_KEY = os.getenv("ADDIS_API_KEY", "").strip()
+ADDIS_BASE_URL = os.getenv("ADDIS_BASE_URL", "https://api.addisassistant.com").strip().rstrip("/")
+ADDIS_AMHARIC_VOICE_ID = os.getenv("ADDIS_AMHARIC_VOICE_ID", "am-hamen").strip()
 
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
@@ -117,11 +122,217 @@ if not supabase:
 if not GROQ_API_KEY:
     logger.warning("⚠️ GROQ_API_KEY is missing! Groq AI features will not work.")
 
+if not ADDIS_API_KEY:
+    logger.warning("⚠️ ADDIS_API_KEY is missing! Addis AI Amharic TTS/STT will be disabled until configured on Render.")
+
 
 def _groq_headers() -> dict:
     """Builds authorization headers for Groq API requests."""
     return {
         "Authorization": f"Bearer {GROQ_API_KEY}",
+    }
+
+
+def _addis_headers() -> dict:
+    """Builds x-api-key headers for Addis AI requests."""
+    if not ADDIS_API_KEY:
+        raise RuntimeError("ADDIS_API_KEY is not configured")
+    return {
+        "x-api-key": ADDIS_API_KEY,
+    }
+
+
+def _map_addis_lang_code(lang: str) -> str:
+    """Maps Nexa language names to Addis AI ISO codes (am, om, ti)."""
+    norm = (lang or "amharic").strip().lower()
+    if norm in ("am", "amharic", "am-et"):
+        return "am"
+    if norm in ("om", "oromo", "afaan oromo", "om-et"):
+        return "om"
+    if norm in ("ti", "tigrinya", "ti-et"):
+        return "ti"
+    return "am"
+
+
+class AddisTTSRequest(BaseModel):
+    text: str
+    language: str = "amharic"
+    voice_id: str | None = None
+    output_format: str = "mp3_44100"
+
+
+async def synthesize_addis_speech_bytes(
+    text: str,
+    language: str = "amharic",
+    voice_id: str | None = None,
+    output_format: str = "mp3_44100",
+) -> tuple[bytes, str]:
+    """Synthesizes Amharic/Oromo speech via Addis AI Voices 2 (/api/v1/voice/generations)."""
+    clean_text = (text or "").strip()
+    if not clean_text or not ADDIS_API_KEY:
+        return b"", "audio/mpeg"
+
+    lang_code = _map_addis_lang_code(language)
+    chosen_voice = voice_id or (ADDIS_AMHARIC_VOICE_ID if lang_code == "am" else None)
+
+    payload: dict = {
+        "text": clean_text,
+        "language": lang_code,
+        "output_format": output_format,
+    }
+    if chosen_voice:
+        payload["voice_id"] = chosen_voice
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        owns_client = True
+
+    try:
+        resp = await client.post(
+            f"{ADDIS_BASE_URL}/api/v1/voice/generations",
+            headers={**_addis_headers(), "Content-Type": "application/json"},
+            json=payload,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "")
+        if content_type.startswith("audio/"):
+            return bytes(resp.content), content_type.split(";")[0]
+
+        data = resp.json()
+        audio_b64 = (
+            data.get("audio_base64")
+            or data.get("audio")
+            or (data.get("data") or {}).get("audio_base64")
+            or (data.get("data") or {}).get("audio")
+        )
+        if audio_b64:
+            media_type = "audio/wav" if "wav" in output_format else "audio/mpeg"
+            return base64.b64decode(audio_b64), media_type
+
+        audio_url = (
+            data.get("audio_url")
+            or data.get("url")
+            or (data.get("data") or {}).get("audio_url")
+        )
+        if audio_url:
+            dl = await client.get(audio_url)
+            dl.raise_for_status()
+            dl_type = dl.headers.get("content-type", "audio/mpeg").split(";")[0]
+            return bytes(dl.content), dl_type
+
+        return b"", "audio/mpeg"
+    except Exception as e:
+        logger.error(f"Addis TTS generation error: {e}")
+        return b"", "audio/mpeg"
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def transcribe_audio_addis_stt(
+    audio_bytes: bytes,
+    filename: str = "audio.webm",
+    mime_type: str = "audio/webm",
+    language: str = "amharic",
+) -> str:
+    """Transcribes audio bytes using Addis Scribe (/api/v2/stt)."""
+    if not ADDIS_API_KEY or not audio_bytes:
+        return ""
+
+    lang_code = _map_addis_lang_code(language)
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        owns_client = True
+
+    try:
+        resp = await client.post(
+            f"{ADDIS_BASE_URL}/api/v2/stt",
+            headers=_addis_headers(),
+            files={"audio": (filename, audio_bytes, mime_type)},
+            data={"request_data": json.dumps({"language_code": lang_code})},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        transcript = (
+            payload.get("text")
+            or payload.get("transcript")
+            or (payload.get("data") or {}).get("text")
+            or (payload.get("data") or {}).get("transcript")
+            or ""
+        )
+        return str(transcript).strip()
+    except Exception as e:
+        logger.error(f"Addis STT transcription error: {e}")
+        return ""
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+@app.post("/api/tts")
+async def api_text_to_speech(req: AddisTTSRequest):
+    """Generates natural Amharic/Oromo speech audio via Addis AI for web call playback."""
+    if not ADDIS_API_KEY:
+        raise HTTPException(status_code=503, detail="ADDIS_API_KEY is not configured on Render")
+
+    audio_bytes, media_type = await synthesize_addis_speech_bytes(
+        text=req.text,
+        language=req.language,
+        voice_id=req.voice_id,
+        output_format=req.output_format,
+    )
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail="Failed to synthesize speech via Addis AI")
+
+    return Response(content=audio_bytes, media_type=media_type)
+
+
+@app.post("/api/stt")
+async def api_speech_to_text(
+    audio: UploadFile = File(...),
+    language: str = Form("amharic"),
+):
+    """Transcribes browser microphone audio via Addis Scribe with Groq Whisper fallback."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload")
+
+    filename = audio.filename or "recording.webm"
+    mime_type = audio.content_type or "audio/webm"
+    lang_norm = (language or "amharic").strip().lower()
+
+    transcript = ""
+    provider = "none"
+
+    if ADDIS_API_KEY and lang_norm in ("amharic", "am", "oromo", "om", "tigrinya", "ti"):
+        transcript = await transcribe_audio_addis_stt(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            language=lang_norm,
+        )
+        if transcript:
+            provider = "addis"
+
+    if not transcript and GROQ_API_KEY:
+        transcript = await transcribe_call_audio_groq(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            language=lang_norm,
+        )
+        if transcript:
+            provider = "groq"
+
+    return {
+        "status": "success" if transcript else "empty",
+        "transcript": transcript,
+        "provider": provider,
     }
 
 
@@ -352,6 +563,7 @@ async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: st
             "business_phone": bus_phone,
             "plan_tier": tier_num,
             "voice_ai_active": True,
+            "addis_voice_ready": bool(ADDIS_API_KEY),
             "call_url": build_merchant_exclusive_call_url(
                 phone=bus_phone,
                 bot_token=store.get("bot_token", ""),
@@ -374,6 +586,7 @@ async def web_voice_call_turn(request: Request):
     caller_phone_input = str(body.get("caller_phone") or body.get("phone_number") or "").strip()
     random_log_id = str(body.get("call_log_id") or "").strip()
     history_messages = body.get("history") or []
+    include_tts = bool(body.get("include_tts", False))
 
     store = await resolve_single_merchant(phone=phone, bot_token=bot_token_param, store_id=store_id_param)
     if not store:
@@ -456,12 +669,26 @@ async def web_voice_call_turn(request: Request):
         except Exception as e:
             logger.error(f"Web voice lead save error: {e}")
 
+    audio_base64 = None
+    audio_mime = None
+    if include_tts and ADDIS_API_KEY and lang in ("amharic", "oromo"):
+        tts_bytes, media_type = await synthesize_addis_speech_bytes(
+            text=reply_text,
+            language=lang,
+            output_format="mp3_44100",
+        )
+        if tts_bytes:
+            audio_base64 = base64.b64encode(tts_bytes).decode("utf-8")
+            audio_mime = media_type
+
     return {
         "status": "success",
         "store_name": store_name,
         "ai_reply_text": reply_text,
         "extracted_phone": final_phone or None,
         "extracted_name": caller_name_input or None,
+        "audio_base64": audio_base64,
+        "audio_mime": audio_mime,
     }
 
 
@@ -568,16 +795,22 @@ async def answer_registered_phone_with_ai(
 # Live Call Session, STT & TTS Helpers for Tier 4 Phone AI
 # -------------------------------------------------------------------
 class CallSession:
-    def __init__(self, stream_sid: str = "", store: dict | None = None):
+    def __init__(self, stream_sid: str = "", store: dict | None = None, language: str = "amharic"):
         self.stream_sid = stream_sid
         self.store = store or {}
+        self.language = language
         self.caller_phone = ""
         self.messages: list[dict] = []
         self.audio_chunks: list[bytes] = []
         self.busy = False
 
 
-async def transcribe_call_audio_groq(audio_bytes: bytes, filename: str = "call_audio.wav", mime_type: str = "audio/wav") -> str:
+async def transcribe_call_audio_groq(
+    audio_bytes: bytes,
+    filename: str = "call_audio.wav",
+    mime_type: str = "audio/wav",
+    language: str = "amharic",
+) -> str:
     """Transcribes caller audio bytes via Groq's audio transcriptions endpoint."""
     if not GROQ_API_KEY or not audio_bytes:
         return ""
@@ -588,15 +821,20 @@ async def transcribe_call_audio_groq(audio_bytes: bytes, filename: str = "call_a
         client = httpx.AsyncClient(timeout=20.0)
         owns_client = True
 
+    lang_hint = {"amharic": "am", "english": "en"}.get((language or "").lower())
+    form_data = {
+        "model": GROQ_AUDIO_MODEL,
+        "prompt": "Transcribe this phone call accurately in Amharic, English, or Oromo.",
+    }
+    if lang_hint:
+        form_data["language"] = lang_hint
+
     try:
         resp = await client.post(
             f"{GROQ_BASE_URL}/audio/transcriptions",
             headers=_groq_headers(),
             files={"file": (filename, audio_bytes, mime_type)},
-            data={
-                "model": GROQ_AUDIO_MODEL,
-                "prompt": "Transcribe this phone call accurately in Amharic, English, or Oromo.",
-            },
+            data=form_data,
         )
         resp.raise_for_status()
         return str(resp.json().get("text") or "").strip()
@@ -613,8 +851,15 @@ async def generate_live_call_reply(session: CallSession, spoken_text: str) -> st
     store = session.store or {}
     store_name = store.get("store_name", "Nexa Store")
     inventory = store.get("inventory_data", "")
+    lang_directive = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና ተፈጥሯዊ አማርኛ ተጠቀም።",
+        "english": "Respond clearly, politely, and concisely in English.",
+        "oromo": "Afaan Oromootiin gabaabsee ifaan deebisi.",
+    }.get(session.language, "በጣም የዳበረ እና ትክክለኛ አማርኛ ተጠቀም።")
+
     system_prompt = (
         f"You are the AI Voice Receptionist for {store_name}. "
+        f"Language Rule: {lang_directive} "
         "Your answer will be spoken aloud on a live phone call. Keep replies clear, polite, "
         "concise (2-3 sentences max), and grounded in the store catalog below.\n\n"
         f"Catalog:\n{inventory}"
@@ -639,9 +884,14 @@ async def generate_live_call_reply(session: CallSession, spoken_text: str) -> st
         return "ይቅርታ፣ አሁን መልስ ማዘጋጀት አልተቻለም። እባክዎ እንደገና ይሞክሩ።"
 
 
-async def synthesize_call_speech_bytes(reply_text: str) -> bytes:
-    """Hook for converting AI reply text into telephony audio bytes (WAV/PCM/mu-law)."""
-    return b""
+async def synthesize_call_speech_bytes(reply_text: str, language: str = "amharic") -> bytes:
+    """Synthesizes Amharic/Oromo telephony audio bytes via Addis AI Voices 2."""
+    audio_bytes, _ = await synthesize_addis_speech_bytes(
+        text=reply_text,
+        language=language,
+        output_format="wav_44100",
+    )
+    return audio_bytes
 
 
 def _build_incoming_call_xml(stream_url: str, greeting_text: str) -> str:
@@ -721,7 +971,7 @@ async def ai_voice_call_incoming(bot_token: str, request: Request):
 
 @app.websocket("/api/voice-call-stream/{bot_token}")
 async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
-    """Handles live media stream chunks from telephony providers, runs Groq STT + LLM, and streams TTS audio back."""
+    """Handles live media stream chunks from telephony providers, runs Addis/Groq STT + LLM, and streams Addis TTS audio back."""
     await websocket.accept()
     store, err_reason = await _get_voice_enabled_store(bot_token)
     if not store:
@@ -729,7 +979,7 @@ async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
         await websocket.close(code=1008)
         return
 
-    session = CallSession(stream_sid="", store=store)
+    session = CallSession(stream_sid="", store=store, language="amharic")
 
     try:
         while True:
@@ -741,6 +991,8 @@ async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
                 start_meta = event_data.get("start") or {}
                 session.stream_sid = str(start_meta.get("streamSid") or "")
                 session.caller_phone = str(start_meta.get("from") or start_meta.get("caller_phone") or "Unknown Caller")
+                if start_meta.get("language"):
+                    session.language = str(start_meta.get("language")).strip().lower()
             elif event_type == "media":
                 media_payload = event_data.get("media") or {}
                 b64_chunk = media_payload.get("payload")
@@ -755,10 +1007,22 @@ async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
                     try:
                         combined_audio = b"".join(session.audio_chunks)
                         session.audio_chunks.clear()
-                        spoken_text = await transcribe_call_audio_groq(combined_audio)
+                        spoken_text = ""
+                        if ADDIS_API_KEY and session.language in ("amharic", "oromo"):
+                            spoken_text = await transcribe_audio_addis_stt(
+                                audio_bytes=combined_audio,
+                                filename="call_audio.wav",
+                                mime_type="audio/wav",
+                                language=session.language,
+                            )
+                        if not spoken_text:
+                            spoken_text = await transcribe_call_audio_groq(
+                                combined_audio,
+                                language=session.language,
+                            )
                         if spoken_text:
                             reply_text = await generate_live_call_reply(session, spoken_text)
-                            tts_bytes = await synthesize_call_speech_bytes(reply_text)
+                            tts_bytes = await synthesize_call_speech_bytes(reply_text, language=session.language)
                             await _log_phone_call_lead(bot_token, session.caller_phone, f"{spoken_text} -> {reply_text}")
                             out_payload = {
                                 "event": "ai_reply",
@@ -868,10 +1132,10 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Telegram Voice Transcription via Groq Audio API
+# Telegram Voice Transcription via Addis Scribe + Groq Whisper Fallback
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    if not GROQ_API_KEY or not http_client:
+    if not http_client or (not ADDIS_API_KEY and not GROQ_API_KEY):
         return ""
     try:
         file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
@@ -882,17 +1146,29 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
         audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
         audio_data = bytes(audio_bytes_resp.content)
 
-        resp = await http_client.post(
-            f"{GROQ_BASE_URL}/audio/transcriptions",
-            headers=_groq_headers(),
-            files={"file": ("voice.ogg", audio_data, "audio/ogg")},
-            data={
-                "model": GROQ_AUDIO_MODEL,
-                "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
-            },
-        )
-        resp.raise_for_status()
-        return str(resp.json().get("text") or "").strip()
+        if ADDIS_API_KEY:
+            addis_text = await transcribe_audio_addis_stt(
+                audio_bytes=audio_data,
+                filename="voice.ogg",
+                mime_type="audio/ogg",
+                language="amharic",
+            )
+            if addis_text:
+                return addis_text
+
+        if GROQ_API_KEY:
+            resp = await http_client.post(
+                f"{GROQ_BASE_URL}/audio/transcriptions",
+                headers=_groq_headers(),
+                files={"file": ("voice.ogg", audio_data, "audio/ogg")},
+                data={
+                    "model": GROQ_AUDIO_MODEL,
+                    "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
+                },
+            )
+            resp.raise_for_status()
+            return str(resp.json().get("text") or "").strip()
+        return ""
     except Exception as e:
         logger.error(f"Voice transcription error: {e}")
         return ""
@@ -908,6 +1184,7 @@ async def root_health():
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
         "groq_connected": bool(GROQ_API_KEY),
+        "addis_connected": bool(ADDIS_API_KEY),
         "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
         "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET),
     }
@@ -3116,6 +3393,7 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     data = await request.json()
     caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
     spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
+    lang = str(data.get("language") or "amharic").strip().lower()
 
     store, err_reason = await _get_voice_enabled_store(bot_token)
     if not store:
@@ -3146,12 +3424,20 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
 
     await _log_phone_call_lead(bot_token, caller_phone, spoken_text)
 
+    audio_base64 = None
+    if ADDIS_API_KEY and lang in ("amharic", "oromo"):
+        tts_bytes, _ = await synthesize_addis_speech_bytes(text=ai_response, language=lang, output_format="mp3_44100")
+        if tts_bytes:
+            audio_base64 = base64.b64encode(tts_bytes).decode("utf-8")
+
     return {
         "status": "success",
         "store_name": store_name,
         "caller_phone": caller_phone,
         "ai_reply_text": ai_response,
         "tts_ready": True,
+        "addis_tts_ready": bool(ADDIS_API_KEY),
+        "audio_base64": audio_base64,
     }
 
 
@@ -4048,7 +4334,7 @@ if telegram_app:
 @app.on_event("startup")
 async def startup_event():
     global http_client
-    http_client = httpx.AsyncClient(timeout=15.0)
+    http_client = httpx.AsyncClient(timeout=25.0)
     if telegram_app:
         await telegram_app.initialize()
         await telegram_app.start()
@@ -4418,88 +4704,86 @@ async def store_chat_webhook(payload: dict):
         - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
 
         Available Media Tags: {tags_str}
-
         Live Store Catalog Data:
         {inventory_data}
         """
 
-        ai_reply = "ይቅርታ፣ የአገልግሎት ስህተት አጋጥሟል።"
+        ai_reply = "ሰላም! በምን ልረዳዎ እችላለሁ?"
         if GROQ_API_KEY:
             try:
                 ai_reply = await generate_groq_text(
                     prompt=user_text,
                     system_instruction=system_prompt,
                     history_messages=history_messages,
-                    temperature=0.7,
-                    max_output_tokens=600,
+                    temperature=0.65,
+                    max_output_tokens=700,
                 )
             except Exception as e:
-                logger.error(f"Groq Chat Error: {e}")
-                ai_reply = f"⚠️ Groq AI Error: {str(e)}"
+                logger.error(f"Tenant Groq generation error: {e}")
 
-    tag_match = re.search(r"\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\]", ai_reply)
-    clean_ai_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_\-]+\]", "", ai_reply).strip()
+    media_tags = re.findall(r"\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\]", ai_reply)
+    clean_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_\-]+\]", "", ai_reply).strip()
 
-    if supabase:
-        async def _save_chat_history():
+    if supabase and bot_token and chat_id:
+        async def save_history():
             try:
-                now_user = datetime.now(timezone.utc)
-                now_assistant = now_user + timedelta(milliseconds=500)
-                await asyncio.to_thread(lambda: supabase.table("chat_history").insert([
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()},
-                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()},
-                ]).execute())
+                await asyncio.gather(
+                    asyncio.to_thread(lambda: supabase.table("chat_history").insert({
+                        "bot_token": bot_token,
+                        "chat_id": str(chat_id),
+                        "role": "user",
+                        "content": user_text,
+                    }).execute()),
+                    asyncio.to_thread(lambda: supabase.table("chat_history").insert({
+                        "bot_token": bot_token,
+                        "chat_id": str(chat_id),
+                        "role": "model",
+                        "content": clean_reply,
+                    }).execute()),
+                )
             except Exception as e:
-                logger.error(f"Chat history insert error: {e}")
+                logger.error(f"Chat history save error: {e}")
 
-        asyncio.create_task(_save_chat_history())
-
-    asyncio.create_task(
-        analyze_and_upsert_lead(
+        asyncio.create_task(save_history())
+        asyncio.create_task(analyze_and_upsert_lead(
             bot_token=bot_token,
             chat_id=str(chat_id),
             visitor_name=visitor_name,
             user_text=user_text,
             history_messages=history_messages,
             inventory_data=inventory_data,
-        )
-    )
+        ))
 
-    if http_client:
+    if media_tags and supabase and http_client:
+        tier_config = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+        for tag in set(media_tags):
+            try:
+                m_res = await asyncio.to_thread(
+                    lambda t=tag: supabase.table("property_media").select("*").eq("bot_token", bot_token).eq("item_tag", t.lower()).limit(5).execute()
+                )
+                for media_item in (m_res.data or []):
+                    m_type = media_item.get("media_type")
+                    if m_type == "video" and not tier_config["allows_videos"]:
+                        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+                            "chat_id": chat_id,
+                            "text": "🎥 የቪዲዮ ስትሪሚንግ አገልግሎት ለ **Tier 3 Enterprise** እና **Tier 4** ደንበኞች ብቻ የተፈቀደ ነው።",
+                            "parse_mode": "Markdown",
+                        })
+                        continue
+                    endpoint = "sendVideo" if m_type == "video" else "sendPhoto"
+                    field_name = "video" if m_type == "video" else "photo"
+                    await http_client.post(f"https://api.telegram.org/bot{bot_token}/{endpoint}", json={
+                        "chat_id": chat_id,
+                        field_name: media_item["file_id"],
+                        "caption": media_item.get("caption", ""),
+                    })
+            except Exception as e:
+                logger.error(f"Media send error: {e}")
+
+    if bot_token and chat_id and http_client and clean_reply:
         await http_client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": clean_ai_reply},
+            json={"chat_id": chat_id, "text": clean_reply},
         )
-
-    tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
-    if tag_match and supabase and http_client:
-        requested_tag = tag_match.group(1).lower()
-        try:
-            media_rows = await asyncio.to_thread(
-                lambda: supabase.table("property_media").select("*").eq("bot_token", bot_token).eq("item_tag", requested_tag).execute()
-            )
-            if media_rows.data:
-                for item in media_rows.data:
-                    file_id = item["file_id"]
-                    media_type = item["media_type"]
-                    caption = item.get("caption") or ""
-                    if media_type == "photo":
-                        await http_client.post(
-                            f"https://api.telegram.org/bot{bot_token}/sendPhoto",
-                            json={"chat_id": chat_id, "photo": file_id, "caption": caption},
-                        )
-                    elif media_type == "video":
-                        if tier_capabilities["allows_videos"]:
-                            await http_client.post(
-                                f"https://api.telegram.org/bot{bot_token}/sendVideo",
-                                json={"chat_id": chat_id, "video": file_id, "caption": caption},
-                            )
-                        else:
-                            await http_client.post(
-                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                                json={"chat_id": chat_id, "text": "🔒 ቪዲዮዎችን ማየት የሚቻለው ለ Tier 3 (Enterprise) አባላት ብቻ ነው። እባክዎ መደብር ባለቤቱን ያነጋግሩ።"},
-                            )
-        except Exception as e:
-            logger.error(f"Media dispatch error: {e}")
 
     return {"ok": True}
