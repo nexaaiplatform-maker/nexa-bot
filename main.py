@@ -927,7 +927,8 @@ async def web_voice_call_turn(request: Request):
                 system_instruction=system_prompt,
                 history_messages=history_messages[-6:],
                 temperature=0.5,
-                max_output_tokens=280,
+                max_output_tokens=220,
+                model_name=os.getenv("GROQ_VOICE_MODEL", GROQ_TEXT_MODEL).strip() or GROQ_TEXT_MODEL,
             )
         except Exception as e:
             logger.error("External operation failed: %s", type(e).__name__)
@@ -949,11 +950,18 @@ async def web_voice_call_turn(request: Request):
             }
             if final_phone:
                 lead_row["phone_number"] = final_phone
-            await asyncio.to_thread(
-                lambda: supabase.table("leads").upsert(
-                    lead_row, on_conflict="bot_token,visitor_telegram_id"
-                ).execute()
-            )
+            async def persist_voice_lead():
+                try:
+                    await asyncio.to_thread(
+                        lambda: supabase.table("leads").upsert(
+                            lead_row, on_conflict="bot_token,visitor_telegram_id"
+                        ).execute()
+                    )
+                except Exception as persist_error:
+                    logger.warning("Voice lead persistence failed: %s", type(persist_error).__name__)
+
+            # Do not make the caller wait for database writes before hearing the answer.
+            asyncio.create_task(persist_voice_lead())
             asyncio.create_task(
                 analyze_and_upsert_lead(
                     bot_token=merchant_bot_token,
@@ -967,17 +975,10 @@ async def web_voice_call_turn(request: Request):
         except Exception as e:
             logger.error("External operation failed: %s", type(e).__name__)
 
+    # TTS is requested by the browser after this text response.
+    # This keeps reply delivery independent from speech-rendering latency.
     audio_base64 = None
     audio_mime = None
-    if include_tts and ADDIS_API_KEY and lang in ("amharic", "oromo"):
-        tts_bytes, media_type = await synthesize_addis_speech_bytes(
-            text=reply_text,
-            language=lang,
-            output_format="mp3_44100",
-        )
-        if tts_bytes:
-            audio_base64 = base64.b64encode(tts_bytes).decode("utf-8")
-            audio_mime = media_type
 
     return {
         "status": "success",
