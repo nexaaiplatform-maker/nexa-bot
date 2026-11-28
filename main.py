@@ -7,6 +7,7 @@ import random
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
+import warnings
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Form, Header, WebSocket, WebSocketDisconnect, UploadFile, File
@@ -24,6 +25,9 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.warnings import PTBUserWarning
+
+warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 # -------------------------------------------------------------------
 # Secure Configuration & Environment Variables (Synced with Render)
@@ -33,15 +37,30 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://nexa-bot-f5al.onrender.com").strip().rstrip("/")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+
+# Primary AI Engine: Gemini (with automatic Groq fallback on quota/rate-limit or failure)
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip().rstrip("/")
+GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash").strip()
+GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash").strip()
+GEMINI_AUDIO_MODEL = os.getenv("GEMINI_AUDIO_MODEL", "gemini-2.5-flash").strip()
+
+# Secondary / Fallback AI Engine: Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip().rstrip("/")
 GROQ_TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile").strip()
 GROQ_AUDIO_MODEL = os.getenv("GROQ_AUDIO_MODEL", "whisper-large-v3").strip()
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
+
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 
 # Addis AI Speech & Language Configuration (Loaded securely from Render Env Vars)
-ADDIS_API_KEY = os.getenv("ADDIS_API_KEY", "").strip()
+ADDIS_API_KEY = (
+    os.getenv("ADDIS_API_KEY")
+    or os.getenv("ADDIS_AI_API_KEY")
+    or os.getenv("ADDISASSISTANT_API_KEY")
+    or ""
+).strip()
 ADDIS_BASE_URL = os.getenv("ADDIS_BASE_URL", "https://api.addisassistant.com").strip().rstrip("/")
 ADDIS_AMHARIC_VOICE_ID = os.getenv("ADDIS_AMHARIC_VOICE_ID", "am-hamen").strip()
 
@@ -123,11 +142,18 @@ supabase: Client | None = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_
 if not supabase:
     logger.warning("⚠️ SUPABASE_URL or SUPABASE_KEY is missing!")
 
-if not GROQ_API_KEY:
-    logger.warning("⚠️ GROQ_API_KEY is missing! Groq AI features will not work.")
+if GEMINI_API_KEY:
+    logger.info("✅ Gemini Primary AI key detected (Groq configured as automatic limit fallback).")
+else:
+    logger.warning("⚠️ GEMINI_API_KEY is missing! Falling back directly to Groq AI.")
 
-if not ADDIS_API_KEY:
-    logger.warning("⚠️ ADDIS_API_KEY is missing! Addis AI Amharic TTS/STT will be disabled until configured on Render.")
+if not GROQ_API_KEY:
+    logger.warning("⚠️ GROQ_API_KEY is missing! Groq fallback features will not work.")
+
+if ADDIS_API_KEY:
+    logger.info("✅ Addis AI Speech & Language key detected.")
+else:
+    logger.info("ℹ️ ADDIS_API_KEY not set; using Gemini + Groq Whisper STT fallback until configured on Render.")
 
 # Master Telegram Bot Application & Shared HTTP Client
 telegram_app: Application | None = (
@@ -148,6 +174,92 @@ def _groq_headers() -> dict:
     return {
         "Authorization": f"Bearer {GROQ_API_KEY}",
     }
+
+
+def _has_any_llm_key() -> bool:
+    """Returns True if either primary Gemini or fallback Groq API key is configured."""
+    return bool(GEMINI_API_KEY or GROQ_API_KEY)
+
+
+def _is_gemini_limit_or_unavailable(exc: Exception) -> bool:
+    """Detects HTTP 429 quota/rate limits, 503 overload, or API errors requiring Groq fallback."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        if exc.response.status_code in (400, 401, 403, 404, 408, 429, 500, 502, 503, 504):
+            return True
+    err_lower = str(exc).lower()
+    return any(
+        k in err_lower
+        for k in ("429", "quota", "rate limit", "resource_exhausted", "exceeded", "overloaded", "unavailable", "timeout")
+    )
+
+
+def _build_gemini_contents(
+    prompt: str,
+    history_messages: list[dict] | None = None,
+) -> list[dict]:
+    """Converts chat-style role/content dictionaries and a prompt into Gemini REST contents."""
+    contents: list[dict] = []
+    for msg in (history_messages or []):
+        role = "model" if msg.get("role") in ("assistant", "model") else "user"
+        text = str(msg.get("content") or "").strip()
+        if text:
+            contents.append({"role": role, "parts": [{"text": text}]})
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    return contents
+
+
+async def generate_gemini_text(
+    prompt: str,
+    system_instruction: str | None = None,
+    history_messages: list[dict] | None = None,
+    temperature: float = 0.7,
+    max_output_tokens: int = 800,
+    json_mode: bool = False,
+    model_name: str | None = None,
+) -> str:
+    """Runs async Gemini text or structured JSON generation via Google Gemini REST API."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=22.0)
+        owns_client = True
+
+    try:
+        chosen_model = model_name or GEMINI_TEXT_MODEL
+        gen_config: dict = {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+        }
+        if json_mode:
+            gen_config["responseMimeType"] = "application/json"
+
+        payload: dict = {
+            "contents": _build_gemini_contents(prompt=prompt, history_messages=history_messages),
+            "generationConfig": gen_config,
+        }
+        if system_instruction:
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+        resp = await client.post(
+            f"{GEMINI_BASE_URL}/models/{chosen_model}:generateContent",
+            params={"key": GEMINI_API_KEY},
+            headers={"Content-Type": "application/json"},
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+        text_out = "".join(str(p.get("text") or "") for p in parts).strip()
+        if not text_out:
+            raise RuntimeError("Empty text response from Gemini")
+        return text_out
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 def _addis_headers() -> dict:
@@ -336,15 +448,15 @@ async def api_speech_to_text(
         if transcript:
             provider = "addis"
 
-    if not transcript and GROQ_API_KEY:
-        transcript = await transcribe_call_audio_groq(
+    if not transcript and _has_any_llm_key():
+        transcript, llm_provider = await transcribe_audio_gemini_with_groq_fallback(
             audio_bytes=audio_bytes,
             filename=filename,
             mime_type=mime_type,
             language=lang_norm,
         )
         if transcript:
-            provider = "groq"
+            provider = llm_provider
 
     return {
         "status": "success" if transcript else "empty",
@@ -423,6 +535,214 @@ async def generate_groq_text(
     finally:
         if owns_client:
             await client.aclose()
+
+
+async def generate_ai_text(
+    prompt: str,
+    system_instruction: str | None = None,
+    history_messages: list[dict] | None = None,
+    temperature: float = 0.7,
+    max_output_tokens: int = 800,
+    json_mode: bool = False,
+    gemini_model: str | None = None,
+    groq_model: str | None = None,
+) -> str:
+    """Tries Gemini first; if rate/quota limit is reached or Gemini fails, automatically falls back to Groq."""
+    if GEMINI_API_KEY:
+        try:
+            return await generate_gemini_text(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                history_messages=history_messages,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                json_mode=json_mode,
+                model_name=gemini_model,
+            )
+        except Exception as gem_err:
+            if _is_gemini_limit_or_unavailable(gem_err):
+                logger.warning(f"⚠️ Gemini limit reached or unavailable ({gem_err}); continuing with Groq fallback...")
+            else:
+                logger.warning(f"⚠️ Gemini generation error ({gem_err}); continuing with Groq fallback...")
+
+    if GROQ_API_KEY:
+        return await generate_groq_text(
+            prompt=prompt,
+            system_instruction=system_instruction,
+            history_messages=history_messages,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            json_mode=json_mode,
+            model_name=groq_model,
+        )
+
+    raise RuntimeError("Neither GEMINI_API_KEY nor GROQ_API_KEY is configured")
+
+
+async def analyze_receipt_vision_gemini_with_groq_fallback(b64_image: str, prompt: str) -> dict:
+    """Scans payment receipt images with Gemini Vision first, falling back to Groq Vision if Gemini hits limits."""
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=25.0)
+        owns_client = True
+
+    try:
+        if GEMINI_API_KEY:
+            try:
+                gem_payload = {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/jpeg",
+                                        "data": b64_image,
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "maxOutputTokens": 500,
+                        "responseMimeType": "application/json",
+                    },
+                }
+                gem_resp = await client.post(
+                    f"{GEMINI_BASE_URL}/models/{GEMINI_VISION_MODEL}:generateContent",
+                    params={"key": GEMINI_API_KEY},
+                    headers={"Content-Type": "application/json"},
+                    json=gem_payload,
+                )
+                gem_resp.raise_for_status()
+                g_data = gem_resp.json()
+                g_parts = (g_data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+                g_text = "".join(str(p.get("text") or "") for p in g_parts).strip()
+                if g_text:
+                    return json.loads(g_text)
+            except Exception as gem_vis_err:
+                logger.warning(f"⚠️ Gemini Vision limit/error ({gem_vis_err}); falling back to Groq Vision...")
+
+        if GROQ_API_KEY:
+            vision_resp = await client.post(
+                f"{GROQ_BASE_URL}/chat/completions",
+                headers={
+                    **_groq_headers(),
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_VISION_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
+                                },
+                            ],
+                        }
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                    "max_tokens": 500,
+                },
+            )
+            vision_resp.raise_for_status()
+            vision_text = (
+                vision_resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "{}")
+            )
+            return json.loads(vision_text or "{}")
+    except Exception as e:
+        logger.error(f"Receipt Vision OCR Error (Gemini & Groq): {e}")
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    return {"valid": False, "reference_id": None, "detected_amount": None, "detected_name": None, "detected_phone": None}
+
+
+async def transcribe_audio_gemini_with_groq_fallback(
+    audio_bytes: bytes,
+    filename: str = "audio.ogg",
+    mime_type: str = "audio/ogg",
+    language: str = "amharic",
+) -> tuple[str, str]:
+    """Transcribes audio using Gemini multimodal first, automatically falling back to Groq Whisper if limited."""
+    if not audio_bytes:
+        return "", "none"
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=25.0)
+        owns_client = True
+
+    try:
+        if GEMINI_API_KEY:
+            try:
+                b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                gem_payload = {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": (
+                                        f"Transcribe this audio accurately in {language} (Amharic, English, or Oromo). "
+                                        "Return ONLY the exact spoken transcript with no commentary."
+                                    )
+                                },
+                                {
+                                    "inlineData": {
+                                        "mimeType": mime_type or "audio/ogg",
+                                        "data": b64_audio,
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "maxOutputTokens": 500,
+                    },
+                }
+                gem_resp = await client.post(
+                    f"{GEMINI_BASE_URL}/models/{GEMINI_AUDIO_MODEL}:generateContent",
+                    params={"key": GEMINI_API_KEY},
+                    headers={"Content-Type": "application/json"},
+                    json=gem_payload,
+                )
+                gem_resp.raise_for_status()
+                g_data = gem_resp.json()
+                g_parts = (g_data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+                g_transcript = "".join(str(p.get("text") or "") for p in g_parts).strip()
+                if g_transcript:
+                    return g_transcript, "gemini"
+            except Exception as gem_stt_err:
+                logger.warning(f"⚠️ Gemini Audio STT limit/error ({gem_stt_err}); falling back to Groq Whisper...")
+
+        if GROQ_API_KEY:
+            groq_transcript = await transcribe_call_audio_groq(
+                audio_bytes=audio_bytes,
+                filename=filename,
+                mime_type=mime_type,
+                language=language,
+            )
+            if groq_transcript:
+                return groq_transcript, "groq"
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    return "", "none"
 
 
 # -------------------------------------------------------------------
@@ -761,9 +1081,9 @@ async def web_voice_call_turn(request: Request):
         if foreign_client or lang == "english"
         else "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ? ስምዎን እና ስልክ ቁጥርዎንም ቢነግሩኝ ደስ ይለኛል።"
     )
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
-            reply_text = await generate_groq_text(
+            reply_text = await generate_ai_text(
                 prompt=spoken_text or "Greet the caller and ask how we can help.",
                 system_instruction=system_prompt,
                 history_messages=history_messages[-6:],
@@ -771,7 +1091,7 @@ async def web_voice_call_turn(request: Request):
                 max_output_tokens=280,
             )
         except Exception as e:
-            logger.error(f"Web voice call Groq error: {e}")
+            logger.error(f"Web voice call AI error: {e}")
 
     extracted_phone_match = re.search(r"(\+\d{7,15}|\+251[79]\d{8}|0[79]\d{8})", f"{caller_phone_input} {spoken_text}".replace(" ", ""))
     final_phone = extracted_phone_match.group(0) if extracted_phone_match else caller_phone_input
@@ -893,9 +1213,9 @@ async def answer_registered_phone_with_ai(
         f"Provide a helpful AI answer for registered phone number {norm_phone}."
     )
 
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
-            return await generate_groq_text(
+            return await generate_ai_text(
                 prompt=effective_prompt,
                 system_instruction=system_prompt,
                 history_messages=history_messages or [],
@@ -986,11 +1306,11 @@ async def generate_live_call_reply(session: CallSession, spoken_text: str) -> st
         "concise (2-3 sentences max), and grounded in the store catalog below.\n\n"
         f"Catalog:\n{inventory}"
     )
-    if not GROQ_API_KEY:
+    if not _has_any_llm_key():
         return "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
 
     try:
-        reply = await generate_groq_text(
+        reply = await generate_ai_text(
             prompt=spoken_text,
             system_instruction=system_prompt,
             history_messages=session.messages[-6:],
@@ -1002,7 +1322,7 @@ async def generate_live_call_reply(session: CallSession, spoken_text: str) -> st
         session.messages = session.messages[-8:]
         return reply
     except Exception as e:
-        logger.error(f"Live call Groq reply error: {e}")
+        logger.error(f"Live call AI reply error: {e}")
         return "ይቅርታ፣ አሁን መልስ ማዘጋጀት አልተቻለም። እባክዎ እንደገና ይሞክሩ።"
 
 
@@ -1138,8 +1458,10 @@ async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
                                 language=session.language,
                             )
                         if not spoken_text:
-                            spoken_text = await transcribe_call_audio_groq(
+                            spoken_text, _ = await transcribe_audio_gemini_with_groq_fallback(
                                 combined_audio,
+                                filename="call_audio.wav",
+                                mime_type="audio/wav",
                                 language=session.language,
                             )
                         if spoken_text:
@@ -1166,98 +1488,10 @@ async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
 
 
 # -------------------------------------------------------------------
-# Subscription & User Access Management
-# -------------------------------------------------------------------
-async def get_or_create_user_subscription(user_id: int) -> dict:
-    now = datetime.now(timezone.utc)
-    if supabase:
-        try:
-            res = await asyncio.to_thread(
-                lambda: supabase.table("subscriptions").select("*").eq("user_id", str(user_id)).execute()
-            )
-            if res.data:
-                sub = res.data[0]
-                return {
-                    "trial_expires": parse_dt(sub["trial_expires"]),
-                    "credits_remaining": sub["credits_remaining"],
-                    "is_pro": sub["is_pro"],
-                    "plan_tier": sub.get("plan_tier", 1),
-                }
-        except Exception as e:
-            logger.error(f"Subscription fetch error: {e}")
-
-    default_expiry = now + timedelta(days=3)
-    default_sub = {
-        "trial_expires": default_expiry,
-        "credits_remaining": 50,
-        "is_pro": False,
-        "plan_tier": 1,
-    }
-
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("subscriptions").upsert({
-                    "user_id": str(user_id),
-                    "trial_expires": default_expiry.isoformat(),
-                    "credits_remaining": 50,
-                    "is_pro": False,
-                    "plan_tier": 1,
-                }).execute()
-            )
-        except Exception as e:
-            logger.error(f"Subscription upsert error: {e}")
-
-    return default_sub
-
-
-async def verify_active_access(user_id: int) -> bool:
-    try:
-        sub = await get_or_create_user_subscription(user_id)
-        now = datetime.now(timezone.utc)
-        trial_exp = parse_dt(sub["trial_expires"])
-        if sub["is_pro"]:
-            if sub.get("trial_expires") and now > trial_exp:
-                return False
-            return True
-        if now < trial_exp and sub["credits_remaining"] > 0:
-            return True
-    except Exception as e:
-        logger.error(f"Access verification error: {e}")
-        return True
-    return False
-
-
-async def deduct_credit(user_id: int):
-    try:
-        sub = await get_or_create_user_subscription(user_id)
-        if not sub["is_pro"] and supabase:
-            new_credits = max(0, sub["credits_remaining"] - 1)
-            await asyncio.to_thread(
-                lambda: supabase.table("subscriptions").update({"credits_remaining": new_credits}).eq("user_id", str(user_id)).execute()
-            )
-    except Exception as e:
-        logger.error(f"Credit deduction error: {e}")
-
-
-async def log_visitor(user_id: int):
-    if supabase:
-        try:
-            await asyncio.to_thread(
-                lambda: supabase.table("store_visitors").upsert({
-                    "user_id": str(user_id),
-                    "last_visit": datetime.now(timezone.utc).isoformat(),
-                }, on_conflict="user_id").execute()
-            )
-        except Exception as e:
-            logger.error(f"Visitor logging error: {e}")
-
-
-# -------------------------------------------------------------------
-# Telegram Voice Transcription via Addis Scribe + Groq Whisper Fallback
+# Telegram Voice Transcription via Addis Scribe + Gemini + Groq Whisper Fallback
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    if not http_client or (not ADDIS_API_KEY and not GROQ_API_KEY):
+    if not http_client or (not ADDIS_API_KEY and not _has_any_llm_key()):
         return ""
     try:
         file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
@@ -1278,18 +1512,14 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
             if addis_text:
                 return addis_text
 
-        if GROQ_API_KEY:
-            resp = await http_client.post(
-                f"{GROQ_BASE_URL}/audio/transcriptions",
-                headers=_groq_headers(),
-                files={"file": ("voice.ogg", audio_data, "audio/ogg")},
-                data={
-                    "model": GROQ_AUDIO_MODEL,
-                    "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
-                },
+        if _has_any_llm_key():
+            llm_transcript, _ = await transcribe_audio_gemini_with_groq_fallback(
+                audio_bytes=audio_data,
+                filename="voice.ogg",
+                mime_type="audio/ogg",
+                language="amharic",
             )
-            resp.raise_for_status()
-            return str(resp.json().get("text") or "").strip()
+            return llm_transcript
         return ""
     except Exception as e:
         logger.error(f"Voice transcription error: {e}")
@@ -1305,7 +1535,8 @@ async def root_health():
         "netlify_dashboard": NETLIFY_DASHBOARD_URL,
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
-        "groq_connected": bool(GROQ_API_KEY),
+        "gemini_primary_connected": bool(GEMINI_API_KEY),
+        "groq_fallback_connected": bool(GROQ_API_KEY),
         "addis_connected": bool(ADDIS_API_KEY),
         "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
         "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET),
@@ -2406,9 +2637,9 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
         "⚡ **ኔክሳ የንግድ ቻት አማካሪ**\n\n"
         "ይቅርታ፣ አሁን ምላሽ ማዘጋጀት አልተቻለም። ጥያቄዎን በድጋሚ ይጻፉልኝ — በቻታችን እንቀጥላለን!"
     )
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
-            advice_reply = await generate_groq_text(
+            advice_reply = await generate_ai_text(
                 prompt=user_situation,
                 system_instruction=advisor_prompt,
                 history_messages=advice_history[-10:],
@@ -2954,6 +3185,8 @@ async def run_ai_system_audit_and_heal(target_owner_id: str | None = None) -> st
                         if current_t_wh != expected_tenant_wh:
                             await http_client.post(f"https://api.telegram.org/bot{bot_token}/setWebhook", json={"url": expected_tenant_wh}, timeout=3.0)
                             repaired_webhooks += 1
+                    elif t_info.status_code == 401:
+                        logger.info(f"Skipping revoked/unauthorized tenant bot token {bot_token[:8]}...")
                 except Exception:
                     pass
 
@@ -3112,16 +3345,16 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_input = update.effective_message.text or ""
 
-    await update.effective_message.reply_text("🔄 Groq AI is analyzing, sorting, and formatting your catalog data for Supabase...")
+    await update.effective_message.reply_text("🔄 Nexa AI (Gemini + Groq) is analyzing, sorting, and formatting your catalog data for Supabase...")
 
     structured_inventory = raw_input
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
             prompt = (
                 f"You are an expert database and catalog structurer. Clean up, re-organize, and simplify the following raw store inventory or catalog text "
                 f"into a clean, professional markdown format. Remove messy columns or broken syntax. Ensure clear item names, prices in ETB, and concise descriptions:\n\n{raw_input}"
             )
-            structured_inventory = await generate_groq_text(
+            structured_inventory = await generate_ai_text(
                 prompt=prompt,
                 temperature=0.2,
                 max_output_tokens=1000,
@@ -3131,7 +3364,7 @@ async def receive_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["inventory_data"] = structured_inventory
     await update.effective_message.reply_text(
-        "✅ Catalog successfully sorted and structured by Groq AI!\n\n"
+        "✅ Catalog successfully sorted and structured by Nexa AI!\n\n"
         "እርምጃ 6 ከ 6: እባክዎ ከ @BotFather የወሰዱትን ልዩ የቦት ቶከን (Bot Token) እዚህ ይለጥፉ:"
     )
     return BOT_TOKEN
@@ -3400,7 +3633,7 @@ async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         await update.effective_message.reply_text(
             "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
-            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
+            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Nexa AI በሰዓቱ በስልክ ይመልስላቸዋል።",
             parse_mode="Markdown",
         )
     except Exception as e:
@@ -3488,9 +3721,9 @@ async def ai_voice_call_webhook(bot_token: str, request: Request):
     )
 
     ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
-    if GROQ_API_KEY and spoken_text:
+    if _has_any_llm_key() and spoken_text:
         try:
-            ai_response = await generate_groq_text(
+            ai_response = await generate_ai_text(
                 prompt=spoken_text,
                 system_instruction=system_prompt,
                 temperature=0.5,
@@ -3934,52 +4167,17 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     parsed_result = {"valid": False, "reference_id": None, "detected_amount": None, "detected_name": None, "detected_phone": None}
 
-    if GROQ_API_KEY and http_client:
-        try:
-            prompt = (
-                "Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
-                "1. Transaction Reference ID or Confirmation Code (string)\n"
-                "2. Total Amount in ETB transferred (number or string without commas)\n"
-                "3. Sender or Payer Name if visible (string or null)\n"
-                "4. Sender Phone Number if visible (string or null)\n"
-                "Return strictly valid JSON format: "
-                '{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}'
-            )
-            vision_resp = await http_client.post(
-                f"{GROQ_BASE_URL}/chat/completions",
-                headers={
-                    **_groq_headers(),
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": GROQ_VISION_MODEL,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
-                                },
-                            ],
-                        }
-                    ],
-                    "response_format": {"type": "json_object"},
-                    "temperature": 0.1,
-                    "max_tokens": 500,
-                },
-            )
-            vision_resp.raise_for_status()
-            vision_text = (
-                vision_resp.json()
-                .get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "{}")
-            )
-            parsed_result = json.loads(vision_text or "{}")
-        except Exception as e:
-            logger.error(f"OCR Error: {e}")
+    if _has_any_llm_key():
+        prompt = (
+            "Analyze this Ethiopian bank or Telebirr payment receipt image with 100% strict accuracy. Extract:\n"
+            "1. Transaction Reference ID or Confirmation Code (string)\n"
+            "2. Total Amount in ETB transferred (number or string without commas)\n"
+            "3. Sender or Payer Name if visible (string or null)\n"
+            "4. Sender Phone Number if visible (string or null)\n"
+            "Return strictly valid JSON format: "
+            '{"valid": true/false, "reference_id": "string", "detected_amount": "string", "detected_name": "string", "detected_phone": "string"}'
+        )
+        parsed_result = await analyze_receipt_vision_gemini_with_groq_fallback(b64_image=b64_image, prompt=prompt)
 
     ref_id = parsed_result.get("reference_id")
     detected_amount_str = str(parsed_result.get("detected_amount", ""))
@@ -4316,9 +4514,9 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
         'Return strictly valid JSON: {"intent": "category", "reply": "helpful, professional response in grammatically flawless, natural Amharic guiding them precisely what to do or click"}'
     )
     intent_result = {"intent": "general", "reply": "ሰላም! የንግድ እና የስትራቴጂ ቻት አማካሪ ለማግኘት /advice፣ ቦቶቻችሁን ለማስተዳደር /mybots፣ ወይም አዲስ ቦት ለመፍጠር /register የሚለውን ይጫኑ።"}
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
-            raw_intent_json = await generate_groq_text(
+            raw_intent_json = await generate_ai_text(
                 prompt=user_text,
                 system_instruction=system_prompt,
                 temperature=0.3,
@@ -4628,7 +4826,7 @@ async def analyze_and_upsert_lead(
     history_messages: list,
     inventory_data: str,
 ):
-    if not supabase or not GROQ_API_KEY:
+    if not supabase or not _has_any_llm_key():
         return
 
     convo_text = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages[-5:]])
@@ -4654,7 +4852,7 @@ async def analyze_and_upsert_lead(
     """
 
     try:
-        raw_lead_json = await generate_groq_text(
+        raw_lead_json = await generate_ai_text(
             prompt=analysis_prompt,
             temperature=0.1,
             max_output_tokens=400,
@@ -4807,9 +5005,9 @@ async def store_chat_webhook(payload: dict):
     """
 
     ai_reply_text = "ሰላም! ጥያቄዎን ተቀብለናል። በምን ልረዳዎ እችላለሁ?"
-    if GROQ_API_KEY:
+    if _has_any_llm_key():
         try:
-            ai_reply_text = await generate_groq_text(
+            ai_reply_text = await generate_ai_text(
                 prompt=user_text,
                 system_instruction=system_prompt,
                 history_messages=history_messages,
@@ -4817,7 +5015,7 @@ async def store_chat_webhook(payload: dict):
                 max_output_tokens=700,
             )
         except Exception as e:
-            logger.error(f"Store chat Groq error: {e}")
+            logger.error(f"Store chat AI error: {e}")
 
     media_matches = re.findall(r"\[SEND_MEDIA:\s*([a-zA-Z0-9_\-]+)\]", ai_reply_text)
     clean_ai_reply = re.sub(r"\[SEND_MEDIA:\s*[a-zA-Z0-9_\-]+\]", "", ai_reply_text).strip()
