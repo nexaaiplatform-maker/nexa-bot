@@ -2,6 +2,7 @@ import os
 import re
 import hmac
 import json
+import time
 import base64
 import random
 import asyncio
@@ -67,7 +68,7 @@ ADDIS_AMHARIC_VOICE_ID = os.getenv("ADDIS_AMHARIC_VOICE_ID", "am-hamen").strip()
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
 NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
-NEXA_CALL_BASE_URL = os.getenv("NEXA_CALL_BASE_URL", "https://nexa-ai-call.netlify.app").strip().rstrip("/")
+NEXA_CALL_BASE_URL = os.getenv("NEXA_CALL_BASE_URL", "https://nexa-ai-voicecall.netlify.app").strip().rstrip("/")
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
@@ -83,6 +84,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://admin-nexa-telegram-bot-dashboard.netlify.app",
+        "https://nexa-ai-voicecall.netlify.app",
         "https://nexa-ai-call.netlify.app",
         "https://nexa-bot-f5al.onrender.com",
         "http://localhost:3000",
@@ -943,31 +945,82 @@ def format_simplified_one_by_one_panel(leads_data: list[dict], store_name: str, 
 
 
 def build_merchant_exclusive_call_url(phone: str = "", bot_token: str = "", store_id: str = "") -> str:
-    """Builds a dedicated call link scoped strictly to one merchant's phone/bot/store."""
+    """Builds a dedicated call link scoped strictly to one merchant's phone/bot/store without exposing tokens in URLs."""
     clean_phone = normalize_phone_digits(phone)
     if clean_phone:
         return f"{NEXA_CALL_BASE_URL}/?phone={clean_phone}"
     if store_id:
         return f"{NEXA_CALL_BASE_URL}/?store={store_id}"
-    if bot_token:
-        return f"{NEXA_CALL_BASE_URL}/?bot={bot_token}"
     return f"{NEXA_CALL_BASE_URL}/"
 
 
-async def resolve_single_merchant(phone: str = "", bot_token: str = "", store_id: str = "") -> dict | None:
-    """Resolves a single merchant record strictly by phone, bot_token, or store_id."""
+def _call_signing_secret() -> bytes:
+    """Derives a server-side signing secret from configured environment keys for short-lived call session tokens."""
+    seed = TELEGRAM_WEBHOOK_SECRET or ADMIN_PANEL_PASSWORD or TELEGRAM_BOT_TOKEN or "nexa-tier4-call-secret"
+    return seed.encode("utf-8")
+
+
+def mint_call_session_token(bot_token: str, store_id: str = "", ttl_seconds: int = 14400) -> str:
+    """Mints an HMAC-signed, short-lived call session token scoped to a single merchant bot/store."""
+    if not bot_token:
+        return ""
+    exp_ts = int(time.time()) + max(300, int(ttl_seconds))
+    payload_obj = {"bt": bot_token.strip(), "sid": str(store_id or "").strip(), "exp": exp_ts}
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")).decode("ascii").rstrip("=")
+    sig = hmac.new(_call_signing_secret(), payload_b64.encode("ascii"), "sha256").hexdigest()
+    return f"{payload_b64}.{sig}"
+
+
+def verify_call_session_token(token: str | None) -> dict | None:
+    """Verifies an HMAC-signed call session token and returns its claims if valid and unexpired."""
+    if not token or "." not in token:
+        return None
+    try:
+        payload_b64, sig = token.strip().rsplit(".", 1)
+        expected_sig = hmac.new(_call_signing_secret(), payload_b64.encode("ascii"), "sha256").hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        if int(claims.get("exp") or 0) < int(time.time()):
+            return None
+        if not claims.get("bt"):
+            return None
+        return claims
+    except Exception:
+        return None
+
+
+async def resolve_single_merchant(
+    phone: str = "",
+    bot_token: str = "",
+    store_id: str = "",
+    call_session_token: str = "",
+) -> dict | None:
+    """Resolves a single merchant record strictly by verified session token, phone, store_id, or server-side bot_token."""
+    effective_bot_token = (bot_token or "").strip()
+    effective_store_id = (store_id or "").strip()
+
+    if call_session_token:
+        claims = verify_call_session_token(call_session_token)
+        if not claims:
+            return None
+        effective_bot_token = str(claims.get("bt") or "").strip()
+        if not effective_store_id:
+            effective_store_id = str(claims.get("sid") or "").strip()
+
     if not supabase:
         return None
     try:
-        if bot_token:
+        if effective_bot_token:
             res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("*").eq("bot_token", bot_token.strip()).limit(1).execute()
+                lambda: supabase.table("stores").select("*").eq("bot_token", effective_bot_token).limit(1).execute()
             )
             if res.data:
                 return res.data[0]
-        if store_id:
+        if effective_store_id:
             res = await asyncio.to_thread(
-                lambda: supabase.table("stores").select("*").eq("id", store_id.strip()).limit(1).execute()
+                lambda: supabase.table("stores").select("*").eq("id", effective_store_id).limit(1).execute()
             )
             if res.data:
                 return res.data[0]
@@ -982,15 +1035,29 @@ async def resolve_single_merchant(phone: str = "", bot_token: str = "", store_id
 
 
 @app.get("/api/public-store")
-async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: str = ""):
-    """Returns safe, non-secret details for one merchant's AI inventory call page."""
-    store = await resolve_single_merchant(phone=phone, bot_token=bot_token, store_id=store_id)
+async def public_store_lookup(
+    phone: str = "",
+    bot_token: str = "",
+    store_id: str = "",
+    call_session_token: str = "",
+    x_call_session: str | None = Header(None),
+):
+    """Returns safe, non-secret details and a short-lived call session token for one merchant."""
+    token_val = (call_session_token or x_call_session or "").strip()
+    store = await resolve_single_merchant(
+        phone=phone,
+        bot_token=bot_token,
+        store_id=store_id,
+        call_session_token=token_val,
+    )
     if not store:
         return {"status": "error", "message": "Merchant store not found"}
 
     tier_num = int(store.get("plan_tier") or 1)
     voice_active = store.get("voice_ai_active", True) is not False
     bus_phone = store.get("business_phone") or store.get("owner_phone") or normalize_phone_digits(phone)
+    resolved_bot_token = str(store.get("bot_token") or "")
+    resolved_store_id = str(store.get("id") or "")
 
     if tier_num < 4:
         return {
@@ -1003,8 +1070,11 @@ async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: st
             "message": "Voice AI is currently paused by this merchant.",
         }
 
+    session_token = mint_call_session_token(bot_token=resolved_bot_token, store_id=resolved_store_id)
+
     return {
         "status": "success",
+        "call_session_token": session_token,
         "store": {
             "id": store.get("id"),
             "store_name": store.get("store_name", "Nexa Store"),
@@ -1014,20 +1084,21 @@ async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: st
             "addis_voice_ready": bool(ADDIS_API_KEY),
             "call_url": build_merchant_exclusive_call_url(
                 phone=bus_phone,
-                bot_token=store.get("bot_token", ""),
-                store_id=str(store.get("id") or ""),
+                bot_token=resolved_bot_token,
+                store_id=resolved_store_id,
             ),
         },
     }
 
 
 @app.post("/api/web-voice-call")
-async def web_voice_call_turn(request: Request):
+async def web_voice_call_turn(request: Request, x_call_session: str | None = Header(None)):
     """Answers a foreign or local caller on a merchant's exclusive call link and logs turns one-by-one."""
     body = await request.json()
     phone = str(body.get("phone") or "").strip()
     bot_token_param = str(body.get("bot_token") or "").strip()
     store_id_param = str(body.get("store_id") or "").strip()
+    call_session_token = str(body.get("call_session_token") or x_call_session or "").strip()
     spoken_text = str(body.get("spoken_text") or body.get("message") or "").strip()
     lang = str(body.get("language") or "english").strip().lower()
     caller_name_input = str(body.get("caller_name") or body.get("visitor_name") or "").strip()
@@ -1036,7 +1107,12 @@ async def web_voice_call_turn(request: Request):
     history_messages = body.get("history") or []
     include_tts = bool(body.get("include_tts", False))
 
-    store = await resolve_single_merchant(phone=phone, bot_token=bot_token_param, store_id=store_id_param)
+    store = await resolve_single_merchant(
+        phone=phone,
+        bot_token=bot_token_param,
+        store_id=store_id_param,
+        call_session_token=call_session_token,
+    )
     if not store:
         return {"status": "error", "message": "Merchant not found"}
 
@@ -1059,20 +1135,19 @@ async def web_voice_call_turn(request: Request):
 
     lang_directive = {
         "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ አማርኛ ተጠቀም።",
-        "english": "Respond clearly, politely, and professionally in English for an international/foreign client.",
+        "english": "Respond clearly, concisely, and directly in natural English with zero filler or fluff.",
         "oromo": "Afaan Oromootiin gabaabsee ifaan deebisi.",
-    }.get(lang, "Respond clearly, politely, and professionally in English or Amharic matching the client.")
+    }.get(lang, "Respond clearly, concisely, and directly in natural English with zero filler or fluff.")
 
     system_prompt = f"""
     You are the Tier 4 AI Voice & Foreign Client Concierge for {store_name} ONLY.
-    You communicate seamlessly with foreign/international clients as well as local callers.
-    Answer strictly from THIS store's catalog below. Do not mention or mix other stores.
+    Answer strictly from THIS store's exact catalog and exact phone number below. Never invent prices, items, or phone numbers, and never mix other stores.
     Language Rule: {lang_directive}
-    Keep replies clear, polite, and concise (2-4 sentences).
-    Politely ask for the client's name, contact/phone, and what product/service or inquiry they have if not yet shared.
+    Keep replies direct, factual, and concise (2-3 sentences max) with no fluff.
+    If the caller has not shared their name or phone number yet, ask for it briefly once when helpful.
 
-    Store Phone: {merchant_phone}
-    Store Catalog:
+    Exact Store Phone: {merchant_phone}
+    Exact Store Catalog:
     {inventory_data}
     """
 
