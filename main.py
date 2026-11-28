@@ -4700,7 +4700,13 @@ if telegram_app:
         logger.error(f"Telegram bot update error: {context.error}", exc_info=context.error)
 
     telegram_app.add_error_handler(_telegram_error_handler)
-    http_client = httpx.AsyncClient(timeout=25.0)
+
+
+@app.on_event("startup")
+async def startup_event():
+    global http_client
+    if http_client is None:
+        http_client = httpx.AsyncClient(timeout=25.0)
     if telegram_app:
         await telegram_app.initialize()
         await telegram_app.start()
