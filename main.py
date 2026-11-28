@@ -64,7 +64,7 @@ ADDIS_API_KEY = (
 ).strip()
 ADDIS_BASE_URL = os.getenv("ADDIS_BASE_URL", "https://api.addisassistant.com").strip().rstrip("/")
 ADDIS_AMHARIC_VOICE_ID = os.getenv("ADDIS_AMHARIC_VOICE_ID", "am-hamen").strip()
-
+ADDIS_STT_BACKEND = os.getenv("ADDIS_STT_BACKEND", "turbo").strip().lower()
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
 NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
@@ -274,7 +274,7 @@ def _addis_headers() -> dict:
 
 
 def _map_addis_lang_code(lang: str) -> str:
-    """Maps Nexa language names to Addis AI ISO codes (am, om, ti)."""
+    """Maps Nexa language names to Addis AI ISO codes (am, om, ti, en, fr, sw, ha, sid, wal)."""
     norm = (lang or "amharic").strip().lower()
     if norm in ("am", "amharic", "am-et"):
         return "am"
@@ -282,6 +282,18 @@ def _map_addis_lang_code(lang: str) -> str:
         return "om"
     if norm in ("ti", "tigrinya", "ti-et"):
         return "ti"
+    if norm in ("en", "english", "en-us", "en-gb"):
+        return "en"
+    if norm in ("fr", "french"):
+        return "fr"
+    if norm in ("sw", "swahili"):
+        return "sw"
+    if norm in ("ha", "hausa"):
+        return "ha"
+    if norm in ("sid", "sidama"):
+        return "sid"
+    if norm in ("wal", "wolaytta"):
+        return "wal"
     return "am"
 
 
@@ -298,7 +310,7 @@ async def synthesize_addis_speech_bytes(
     voice_id: str | None = None,
     output_format: str = "mp3_44100",
 ) -> tuple[bytes, str]:
-    """Synthesizes Amharic/Oromo speech via Addis AI Voices 2 (/api/v1/voice/generations)."""
+    """Synthesizes speech via Addis AI Voices 2 (/api/v1/voice/generations)."""
     clean_text = (text or "").strip()
     if not clean_text or not ADDIS_API_KEY:
         return b"", "audio/mpeg"
@@ -333,11 +345,12 @@ async def synthesize_addis_speech_bytes(
             return bytes(resp.content), content_type.split(";")[0]
 
         data = resp.json()
+        data_obj = data.get("data") if isinstance(data.get("data"), dict) else {}
         audio_b64 = (
             data.get("audio_base64")
             or data.get("audio")
-            or (data.get("data") or {}).get("audio_base64")
-            or (data.get("data") or {}).get("audio")
+            or data_obj.get("audio_base64")
+            or data_obj.get("audio")
         )
         if audio_b64:
             media_type = "audio/wav" if "wav" in output_format else "audio/mpeg"
@@ -346,7 +359,7 @@ async def synthesize_addis_speech_bytes(
         audio_url = (
             data.get("audio_url")
             or data.get("url")
-            or (data.get("data") or {}).get("audio_url")
+            or data_obj.get("audio_url")
         )
         if audio_url:
             dl = await client.get(audio_url)
@@ -369,11 +382,12 @@ async def transcribe_audio_addis_stt(
     mime_type: str = "audio/webm",
     language: str = "amharic",
 ) -> str:
-    """Transcribes audio bytes using Addis Scribe (/api/v2/stt)."""
+    """Transcribes audio bytes using Addis Scribe (/api/v1/scribe/transcribe)."""
     if not ADDIS_API_KEY or not audio_bytes:
         return ""
 
     lang_code = _map_addis_lang_code(language)
+    backend_mode = ADDIS_STT_BACKEND if ADDIS_STT_BACKEND in ("turbo", "standard") else "turbo"
     client = http_client
     owns_client = False
     if client is None:
@@ -382,18 +396,19 @@ async def transcribe_audio_addis_stt(
 
     try:
         resp = await client.post(
-            f"{ADDIS_BASE_URL}/api/v2/stt",
+            f"{ADDIS_BASE_URL}/api/v1/scribe/transcribe",
+            params={"backend": backend_mode, "language": lang_code},
             headers=_addis_headers(),
             files={"audio": (filename, audio_bytes, mime_type)},
-            data={"request_data": json.dumps({"language_code": lang_code})},
         )
         resp.raise_for_status()
         payload = resp.json()
+        data_obj = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         transcript = (
-            payload.get("text")
-            or payload.get("transcript")
-            or (payload.get("data") or {}).get("text")
-            or (payload.get("data") or {}).get("transcript")
+            data_obj.get("text")
+            or data_obj.get("transcription")
+            or payload.get("text")
+            or payload.get("transcription")
             or ""
         )
         return str(transcript).strip()
@@ -428,7 +443,7 @@ async def api_speech_to_text(
     audio: UploadFile = File(...),
     language: str = Form("amharic"),
 ):
-    """Transcribes browser microphone audio via Addis Scribe with Groq Whisper fallback."""
+    """Transcribes browser microphone audio via Addis Scribe with Gemini + Groq Whisper fallback."""
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio upload")
@@ -440,7 +455,7 @@ async def api_speech_to_text(
     transcript = ""
     provider = "none"
 
-    if ADDIS_API_KEY and lang_norm in ("amharic", "am", "oromo", "om", "tigrinya", "ti"):
+    if ADDIS_API_KEY and lang_norm in ("amharic", "am", "oromo", "om", "tigrinya", "ti", "english", "en", "french", "fr", "swahili", "sw", "hausa", "ha", "sidama", "sid", "wolaytta", "wal"):
         transcript = await transcribe_audio_addis_stt(
             audio_bytes=audio_bytes,
             filename=filename,
