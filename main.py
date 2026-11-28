@@ -9,8 +9,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Form, Header
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, HTTPException, Form, Header, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -40,9 +40,15 @@ GROQ_AUDIO_MODEL = os.getenv("GROQ_AUDIO_MODEL", "whisper-large-v3").strip()
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 
+# Addis AI Speech & Language Configuration (Loaded securely from Render Env Vars)
+ADDIS_API_KEY = os.getenv("ADDIS_API_KEY", "").strip()
+ADDIS_BASE_URL = os.getenv("ADDIS_BASE_URL", "https://api.addisassistant.com").strip().rstrip("/")
+ADDIS_AMHARIC_VOICE_ID = os.getenv("ADDIS_AMHARIC_VOICE_ID", "am-hamen").strip()
+
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 NETLIFY_DASHBOARD_URL = os.getenv("NETLIFY_DASHBOARD_URL", "https://admin-nexa-telegram-bot-dashboard.netlify.app").strip()
 NETLIFY_PROJECT_ID = os.getenv("NETLIFY_PROJECT_ID", "1661bfe9-a578-413d-b746-6376b245cfa0").strip()
+NEXA_CALL_BASE_URL = os.getenv("NEXA_CALL_BASE_URL", "https://nexa-ai-call.netlify.app").strip().rstrip("/")
 
 TELEBIRR_ACCOUNT_MASKED = os.getenv("TELEBIRR_ACCOUNT_MASKED", "").strip()
 AWASH_ACCOUNT_MASKED = os.getenv("AWASH_ACCOUNT_MASKED", "").strip()
@@ -58,6 +64,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://admin-nexa-telegram-bot-dashboard.netlify.app",
+        "https://nexa-ai-call.netlify.app",
         "https://nexa-bot-f5al.onrender.com",
         "http://localhost:3000",
         "http://localhost:8000",
@@ -67,7 +74,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3-Tier Feature & Pricing Matrix
+# 4-Tier Feature & Pricing Matrix
 TIER_CONFIG = {
     1: {
         "name": "Tier 1 (Starter)",
@@ -75,6 +82,8 @@ TIER_CONFIG = {
         "features": "Core AI Sales, Text Catalog, Photo Support, Basic Leads",
         "allows_photos": True,
         "allows_videos": False,
+        "allows_voice": False,
+        "allows_foreign_clients": False,
         "credits": 500,
     },
     2: {
@@ -83,6 +92,8 @@ TIER_CONFIG = {
         "features": "Advanced AI, Photo Catalogs, Priority Lead Tracking, Custom Themes",
         "allows_photos": True,
         "allows_videos": False,
+        "allows_voice": False,
+        "allows_foreign_clients": False,
         "credits": 2500,
     },
     3: {
@@ -91,6 +102,18 @@ TIER_CONFIG = {
         "features": "Unlimited AI, Full Photo & Video Streaming, VIP Concierge, Advanced Analytics",
         "allows_photos": True,
         "allows_videos": True,
+        "allows_voice": False,
+        "allows_foreign_clients": False,
+        "credits": 999999,
+    },
+    4: {
+        "name": "Tier 4 (AI Voice Concierge)",
+        "price": 7000,
+        "features": "Everything in VIP + Foreign Client Global Communication, Live AI Voice Calls, Custom Phone Number Integration, Real-time STT/TTS in Amharic & International Languages",
+        "allows_photos": True,
+        "allows_videos": True,
+        "allows_voice": True,
+        "allows_foreign_clients": True,
         "credits": 999999,
     },
 }
@@ -102,6 +125,9 @@ if not supabase:
 
 if not GROQ_API_KEY:
     logger.warning("⚠️ GROQ_API_KEY is missing! Groq AI features will not work.")
+
+if not ADDIS_API_KEY:
+    logger.warning("⚠️ ADDIS_API_KEY is missing! Addis AI Amharic TTS/STT will be disabled until configured on Render.")
 
 # Master Telegram Bot Application & Shared HTTP Client
 telegram_app: Application | None = (
@@ -121,6 +147,209 @@ def _groq_headers() -> dict:
     """Builds authorization headers for Groq API requests."""
     return {
         "Authorization": f"Bearer {GROQ_API_KEY}",
+    }
+
+
+def _addis_headers() -> dict:
+    """Builds x-api-key headers for Addis AI requests."""
+    if not ADDIS_API_KEY:
+        raise RuntimeError("ADDIS_API_KEY is not configured")
+    return {
+        "x-api-key": ADDIS_API_KEY,
+    }
+
+
+def _map_addis_lang_code(lang: str) -> str:
+    """Maps Nexa language names to Addis AI ISO codes (am, om, ti)."""
+    norm = (lang or "amharic").strip().lower()
+    if norm in ("am", "amharic", "am-et"):
+        return "am"
+    if norm in ("om", "oromo", "afaan oromo", "om-et"):
+        return "om"
+    if norm in ("ti", "tigrinya", "ti-et"):
+        return "ti"
+    return "am"
+
+
+class AddisTTSRequest(BaseModel):
+    text: str
+    language: str = "amharic"
+    voice_id: str | None = None
+    output_format: str = "mp3_44100"
+
+
+async def synthesize_addis_speech_bytes(
+    text: str,
+    language: str = "amharic",
+    voice_id: str | None = None,
+    output_format: str = "mp3_44100",
+) -> tuple[bytes, str]:
+    """Synthesizes Amharic/Oromo speech via Addis AI Voices 2 (/api/v1/voice/generations)."""
+    clean_text = (text or "").strip()
+    if not clean_text or not ADDIS_API_KEY:
+        return b"", "audio/mpeg"
+
+    lang_code = _map_addis_lang_code(language)
+    chosen_voice = voice_id or (ADDIS_AMHARIC_VOICE_ID if lang_code == "am" else None)
+
+    payload: dict = {
+        "text": clean_text,
+        "language": lang_code,
+        "output_format": output_format,
+    }
+    if chosen_voice:
+        payload["voice_id"] = chosen_voice
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        owns_client = True
+
+    try:
+        resp = await client.post(
+            f"{ADDIS_BASE_URL}/api/v1/voice/generations",
+            headers={**_addis_headers(), "Content-Type": "application/json"},
+            json=payload,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "")
+        if content_type.startswith("audio/"):
+            return bytes(resp.content), content_type.split(";")[0]
+
+        data = resp.json()
+        audio_b64 = (
+            data.get("audio_base64")
+            or data.get("audio")
+            or (data.get("data") or {}).get("audio_base64")
+            or (data.get("data") or {}).get("audio")
+        )
+        if audio_b64:
+            media_type = "audio/wav" if "wav" in output_format else "audio/mpeg"
+            return base64.b64decode(audio_b64), media_type
+
+        audio_url = (
+            data.get("audio_url")
+            or data.get("url")
+            or (data.get("data") or {}).get("audio_url")
+        )
+        if audio_url:
+            dl = await client.get(audio_url)
+            dl.raise_for_status()
+            dl_type = dl.headers.get("content-type", "audio/mpeg").split(";")[0]
+            return bytes(dl.content), dl_type
+
+        return b"", "audio/mpeg"
+    except Exception as e:
+        logger.error(f"Addis TTS generation error: {e}")
+        return b"", "audio/mpeg"
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def transcribe_audio_addis_stt(
+    audio_bytes: bytes,
+    filename: str = "audio.webm",
+    mime_type: str = "audio/webm",
+    language: str = "amharic",
+) -> str:
+    """Transcribes audio bytes using Addis Scribe (/api/v2/stt)."""
+    if not ADDIS_API_KEY or not audio_bytes:
+        return ""
+
+    lang_code = _map_addis_lang_code(language)
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        owns_client = True
+
+    try:
+        resp = await client.post(
+            f"{ADDIS_BASE_URL}/api/v2/stt",
+            headers=_addis_headers(),
+            files={"audio": (filename, audio_bytes, mime_type)},
+            data={"request_data": json.dumps({"language_code": lang_code})},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        transcript = (
+            payload.get("text")
+            or payload.get("transcript")
+            or (payload.get("data") or {}).get("text")
+            or (payload.get("data") or {}).get("transcript")
+            or ""
+        )
+        return str(transcript).strip()
+    except Exception as e:
+        logger.error(f"Addis STT transcription error: {e}")
+        return ""
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+@app.post("/api/tts")
+async def api_text_to_speech(req: AddisTTSRequest):
+    """Generates natural Amharic/Oromo speech audio via Addis AI for web call playback."""
+    if not ADDIS_API_KEY:
+        raise HTTPException(status_code=503, detail="ADDIS_API_KEY is not configured on Render")
+
+    audio_bytes, media_type = await synthesize_addis_speech_bytes(
+        text=req.text,
+        language=req.language,
+        voice_id=req.voice_id,
+        output_format=req.output_format,
+    )
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail="Failed to synthesize speech via Addis AI")
+
+    return Response(content=audio_bytes, media_type=media_type)
+
+
+@app.post("/api/stt")
+async def api_speech_to_text(
+    audio: UploadFile = File(...),
+    language: str = Form("amharic"),
+):
+    """Transcribes browser microphone audio via Addis Scribe with Groq Whisper fallback."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload")
+
+    filename = audio.filename or "recording.webm"
+    mime_type = audio.content_type or "audio/webm"
+    lang_norm = (language or "amharic").strip().lower()
+
+    transcript = ""
+    provider = "none"
+
+    if ADDIS_API_KEY and lang_norm in ("amharic", "am", "oromo", "om", "tigrinya", "ti"):
+        transcript = await transcribe_audio_addis_stt(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            language=lang_norm,
+        )
+        if transcript:
+            provider = "addis"
+
+    if not transcript and GROQ_API_KEY:
+        transcript = await transcribe_call_audio_groq(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            language=lang_norm,
+        )
+        if transcript:
+            provider = "groq"
+
+    return {
+        "status": "success" if transcript else "empty",
+        "transcript": transcript,
+        "provider": provider,
     }
 
 
@@ -261,11 +490,328 @@ def build_copy_url_keyboard(url: str, extra_rows: list[list[InlineKeyboardButton
 
 
 def normalize_phone_digits(raw_phone: str | None) -> str:
-    """Normalizes Ethiopian/international phone strings into comparable digits."""
+    """Normalizes Ethiopian and international phone strings into comparable digits."""
     digits = re.sub(r"\D+", "", raw_phone or "")
     if digits.startswith("251") and len(digits) == 12:
         return "0" + digits[3:]
+    if digits.startswith("00") and len(digits) > 4:
+        return digits[2:]
     return digits
+
+
+def is_foreign_phone_or_client(raw_phone: str | None = "", language: str = "", raw_text: str = "") -> bool:
+    """Detects whether a client/caller is a foreign client via international prefix or language."""
+    digits = re.sub(r"\D+", "", raw_phone or "")
+    if digits and not (digits.startswith("09") or digits.startswith("07") or digits.startswith("2519") or digits.startswith("2517")):
+        return True
+    if str(raw_phone or "").strip().startswith("+") and not str(raw_phone or "").strip().startswith("+251"):
+        return True
+    lang_norm = (language or "").strip().lower()
+    if lang_norm in ("english", "en", "french", "fr", "arabic", "ar", "foreign", "international"):
+        return True
+    if raw_text and re.search(r"\b(foreign|international|abroad|outside ethiopia|export|global client)\b", raw_text.lower()):
+        return True
+    return False
+
+
+async def append_one_by_one_lead_conversation(
+    bot_token: str,
+    visitor_id: str,
+    visitor_name: str,
+    phone_number: str | None,
+    user_turn: str,
+    ai_turn: str,
+    is_foreign: bool = False,
+):
+    """Appends each conversation turn one-by-one into the lead's simplified conversation log."""
+    if not supabase or not bot_token or not visitor_id:
+        return
+
+    clean_user = str(user_turn or "").strip()
+    clean_ai = str(ai_turn or "").strip()
+    if not clean_user and not clean_ai:
+        return
+
+    turn_label = "🌍 Foreign Client" if is_foreign else "💬 Client"
+    one_by_one_entry = f"{turn_label} ({visitor_name}): {clean_user} → 🤖 AI: {clean_ai}"
+
+    try:
+        existing_res = await asyncio.to_thread(
+            lambda: supabase.table("leads")
+            .select("interest_summary, phone_number, visitor_name")
+            .eq("bot_token", bot_token)
+            .eq("visitor_telegram_id", str(visitor_id))
+            .limit(1)
+            .execute()
+        )
+
+        prev_summary = ""
+        existing_phone = None
+        existing_name = None
+        if existing_res.data:
+            row = existing_res.data[0]
+            prev_summary = str(row.get("interest_summary") or "").strip()
+            existing_phone = row.get("phone_number")
+            existing_name = row.get("visitor_name")
+
+        # Keep clean one-by-one turns separated with a clear divider so every turn is readable sequentially
+        if prev_summary:
+            merged_summary = f"{prev_summary}\n• {one_by_one_entry}"
+        else:
+            merged_summary = f"• {one_by_one_entry}"
+
+        # Cap stored text safely while preserving the full sequential one-by-one log
+        if len(merged_summary) > 3800:
+            turns_list = [t.strip() for t in merged_summary.split("\n• ") if t.strip()]
+            merged_summary = "\n• " + "\n• ".join(turns_list[-25:])
+
+        final_name = visitor_name
+        if existing_name and (not visitor_name or visitor_name.startswith("User ") or visitor_name.startswith("Call Visitor")):
+            final_name = existing_name
+
+        payload = {
+            "bot_token": bot_token,
+            "visitor_telegram_id": str(visitor_id),
+            "visitor_name": final_name,
+            "interest_summary": merged_summary,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        chosen_phone = phone_number or existing_phone
+        if chosen_phone:
+            payload["phone_number"] = chosen_phone
+
+        await asyncio.to_thread(
+            lambda: supabase.table("leads").upsert(
+                payload, on_conflict="bot_token,visitor_telegram_id"
+            ).execute()
+        )
+    except Exception as e:
+        logger.error(f"One-by-one lead conversation append error: {e}")
+
+
+def format_simplified_one_by_one_panel(leads_data: list[dict], store_name: str, total_visitors: int) -> str:
+    """Renders a clean, simplified leads panel showing every conversation one-by-one."""
+    header = (
+        f"📋 **የደንበኞች የውይይት ፓነል (Simplified One-by-One Leads) — {store_name}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• ጠቅላላ ጎብኚዎች: {total_visitors} | የተመዘገቡ ውይይቶች: {len(leads_data)}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    if not leads_data:
+        return header + "\n📭 እስካሁን የተመዘገበ የውይይት ሊድ የለም።"
+
+    blocks = [header]
+    for idx, lead in enumerate(leads_data[:20], start=1):
+        raw_name = str(lead.get("visitor_name") or "").strip()
+        name = raw_name if raw_name and raw_name.lower() not in ["anonymous", "none", "null", "unknown"] else f"ደንበኛ #{lead.get('visitor_telegram_id', idx)}"
+        phone = lead.get("phone_number") or "—"
+        raw_conv = str(lead.get("interest_summary") or "አጠቃላይ ፍለጋ").strip()
+
+        # Split conversation lines so each exchange appears one-by-one in order
+        raw_lines = [ln.lstrip("• ").strip() for ln in raw_conv.splitlines() if ln.strip()]
+        one_by_one_lines = []
+        for turn_idx, turn_txt in enumerate(raw_lines, start=1):
+            one_by_one_lines.append(f"  {turn_idx}. {turn_txt}")
+
+        conv_block = "\n".join(one_by_one_lines)
+        blocks.append(
+            f"**{idx}. {name}** (`{phone}`)\n"
+            f"{conv_block}\n"
+            f"──────────────────────"
+        )
+    return "\n".join(blocks)
+
+
+def build_merchant_exclusive_call_url(phone: str = "", bot_token: str = "", store_id: str = "") -> str:
+    """Builds a dedicated call link scoped strictly to one merchant's phone/bot/store."""
+    clean_phone = normalize_phone_digits(phone)
+    if clean_phone:
+        return f"{NEXA_CALL_BASE_URL}/?phone={clean_phone}"
+    if store_id:
+        return f"{NEXA_CALL_BASE_URL}/?store={store_id}"
+    if bot_token:
+        return f"{NEXA_CALL_BASE_URL}/?bot={bot_token}"
+    return f"{NEXA_CALL_BASE_URL}/"
+
+
+async def resolve_single_merchant(phone: str = "", bot_token: str = "", store_id: str = "") -> dict | None:
+    """Resolves a single merchant record strictly by phone, bot_token, or store_id."""
+    if not supabase:
+        return None
+    try:
+        if bot_token:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("bot_token", bot_token.strip()).limit(1).execute()
+            )
+            if res.data:
+                return res.data[0]
+        if store_id:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("id", store_id.strip()).limit(1).execute()
+            )
+            if res.data:
+                return res.data[0]
+        if phone:
+            matched = await lookup_registered_phone_stores(phone)
+            if matched:
+                matched.sort(key=lambda s: int(s.get("plan_tier") or 1), reverse=True)
+                return matched[0]
+    except Exception as e:
+        logger.error(f"Single merchant resolution error: {e}")
+    return None
+
+
+@app.get("/api/public-store")
+async def public_store_lookup(phone: str = "", bot_token: str = "", store_id: str = ""):
+    """Returns safe, non-secret details for one merchant's AI inventory call page."""
+    store = await resolve_single_merchant(phone=phone, bot_token=bot_token, store_id=store_id)
+    if not store:
+        return {"status": "error", "message": "Merchant store not found"}
+
+    tier_num = int(store.get("plan_tier") or 1)
+    voice_active = store.get("voice_ai_active", True) is not False
+    bus_phone = store.get("business_phone") or store.get("owner_phone") or normalize_phone_digits(phone)
+
+    if tier_num < 4:
+        return {
+            "status": "error",
+            "message": "This merchant is not yet on Tier 4 (AI Voice Concierge).",
+        }
+    if not voice_active:
+        return {
+            "status": "error",
+            "message": "Voice AI is currently paused by this merchant.",
+        }
+
+    return {
+        "status": "success",
+        "store": {
+            "id": store.get("id"),
+            "store_name": store.get("store_name", "Nexa Store"),
+            "business_phone": bus_phone,
+            "plan_tier": tier_num,
+            "voice_ai_active": True,
+            "addis_voice_ready": bool(ADDIS_API_KEY),
+            "call_url": build_merchant_exclusive_call_url(
+                phone=bus_phone,
+                bot_token=store.get("bot_token", ""),
+                store_id=str(store.get("id") or ""),
+            ),
+        },
+    }
+
+
+@app.post("/api/web-voice-call")
+async def web_voice_call_turn(request: Request):
+    """Answers a foreign or local caller on a merchant's exclusive call link and logs turns one-by-one."""
+    body = await request.json()
+    phone = str(body.get("phone") or "").strip()
+    bot_token_param = str(body.get("bot_token") or "").strip()
+    store_id_param = str(body.get("store_id") or "").strip()
+    spoken_text = str(body.get("spoken_text") or body.get("message") or "").strip()
+    lang = str(body.get("language") or "english").strip().lower()
+    caller_name_input = str(body.get("caller_name") or body.get("visitor_name") or "").strip()
+    caller_phone_input = str(body.get("caller_phone") or body.get("phone_number") or "").strip()
+    random_log_id = str(body.get("call_log_id") or "").strip()
+    history_messages = body.get("history") or []
+    include_tts = bool(body.get("include_tts", False))
+
+    store = await resolve_single_merchant(phone=phone, bot_token=bot_token_param, store_id=store_id_param)
+    if not store:
+        return {"status": "error", "message": "Merchant not found"}
+
+    tier_num = int(store.get("plan_tier") or 1)
+    if tier_num < 4:
+        return {"status": "error", "message": "Tier 4 is required for AI Voice & Foreign Client Concierge"}
+    if store.get("voice_ai_active") is False:
+        return {"status": "error", "message": "Voice AI is paused"}
+
+    merchant_bot_token = str(store.get("bot_token") or "")
+    store_name = str(store.get("store_name") or "Nexa Store")
+    inventory_data = str(store.get("inventory_data") or "")
+    merchant_phone = str(store.get("business_phone") or store.get("owner_phone") or phone)
+
+    foreign_client = is_foreign_phone_or_client(
+        raw_phone=caller_phone_input or phone,
+        language=lang,
+        raw_text=spoken_text,
+    )
+
+    lang_directive = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ አማርኛ ተጠቀም።",
+        "english": "Respond clearly, politely, and professionally in English for an international/foreign client.",
+        "oromo": "Afaan Oromootiin gabaabsee ifaan deebisi.",
+    }.get(lang, "Respond clearly, politely, and professionally in English or Amharic matching the client.")
+
+    system_prompt = f"""
+    You are the Tier 4 AI Voice & Foreign Client Concierge for {store_name} ONLY.
+    You communicate seamlessly with foreign/international clients as well as local callers.
+    Answer strictly from THIS store's catalog below. Do not mention or mix other stores.
+    Language Rule: {lang_directive}
+    Keep replies clear, polite, and concise (2-4 sentences).
+    Politely ask for the client's name, contact/phone, and what product/service or inquiry they have if not yet shared.
+
+    Store Phone: {merchant_phone}
+    Store Catalog:
+    {inventory_data}
+    """
+
+    reply_text = (
+        "Hello! Welcome to our AI Concierge. How may I assist you today, and could you share your name and contact details?"
+        if foreign_client or lang == "english"
+        else "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ? ስምዎን እና ስልክ ቁጥርዎንም ቢነግሩኝ ደስ ይለኛል።"
+    )
+    if GROQ_API_KEY:
+        try:
+            reply_text = await generate_groq_text(
+                prompt=spoken_text or "Greet the caller and ask how we can help.",
+                system_instruction=system_prompt,
+                history_messages=history_messages[-6:],
+                temperature=0.5,
+                max_output_tokens=280,
+            )
+        except Exception as e:
+            logger.error(f"Web voice call Groq error: {e}")
+
+    extracted_phone_match = re.search(r"(\+\d{7,15}|\+251[79]\d{8}|0[79]\d{8})", f"{caller_phone_input} {spoken_text}".replace(" ", ""))
+    final_phone = extracted_phone_match.group(0) if extracted_phone_match else caller_phone_input
+
+    visitor_label = caller_name_input or (f"Caller ({final_phone})" if final_phone else f"Call Visitor ({random_log_id or 'Web'})")
+    visitor_id = f"call_{normalize_phone_digits(final_phone) or random_log_id or 'session'}"
+
+    if supabase and merchant_bot_token:
+        await append_one_by_one_lead_conversation(
+            bot_token=merchant_bot_token,
+            visitor_id=visitor_id,
+            visitor_name=visitor_label,
+            phone_number=final_phone or None,
+            user_turn=spoken_text or "(Connected to call)",
+            ai_turn=reply_text,
+            is_foreign=foreign_client,
+        )
+
+    audio_base64 = None
+    audio_mime = None
+    if include_tts and ADDIS_API_KEY and lang in ("amharic", "oromo"):
+        tts_bytes, media_type = await synthesize_addis_speech_bytes(
+            text=reply_text,
+            language=lang,
+            output_format="mp3_44100",
+        )
+        if tts_bytes:
+            audio_base64 = base64.b64encode(tts_bytes).decode("utf-8")
+            audio_mime = media_type
+
+    return {
+        "status": "success",
+        "store_name": store_name,
+        "is_foreign_client": foreign_client,
+        "ai_reply_text": reply_text,
+        "extracted_phone": final_phone or None,
+        "extracted_name": caller_name_input or None,
+        "audio_base64": audio_base64,
+        "audio_mime": audio_mime,
+    }
 
 
 async def lookup_registered_phone_stores(raw_phone: str) -> list[dict]:
@@ -311,12 +857,14 @@ async def answer_registered_phone_with_ai(
 
     store_summaries = []
     for st in stores:
-        t_num = min(int(st.get("plan_tier") or 1), 3)
+        t_num = st.get("plan_tier", 1)
         t_name = TIER_CONFIG.get(t_num, TIER_CONFIG[1])["name"]
+        voice_active = "ንቁ (Active)" if st.get("voice_ai_active", True) else "ተቋርጧል (Paused)"
         store_summaries.append(
             f"- Store Name: {st.get('store_name', 'Nexa Store')}\n"
             f"  Registered Phone: {st.get('business_phone') or st.get('owner_phone') or norm_phone}\n"
             f"  Plan Tier: {t_name}\n"
+            f"  Voice AI Status: {voice_active}\n"
             f"  Catalog / Info:\n{st.get('inventory_data', 'No catalog details provided.')}"
         )
 
@@ -366,6 +914,258 @@ async def answer_registered_phone_with_ai(
 
 
 # -------------------------------------------------------------------
+# Live Call Session, STT & TTS Helpers for Tier 4 Phone AI
+# -------------------------------------------------------------------
+class CallSession:
+    def __init__(self, stream_sid: str = "", store: dict | None = None, language: str = "amharic"):
+        self.stream_sid = stream_sid
+        self.store = store or {}
+        self.language = language
+        self.caller_phone = ""
+        self.messages: list[dict] = []
+        self.audio_chunks: list[bytes] = []
+        self.busy = False
+
+
+async def transcribe_call_audio_groq(
+    audio_bytes: bytes,
+    filename: str = "call_audio.wav",
+    mime_type: str = "audio/wav",
+    language: str = "amharic",
+) -> str:
+    """Transcribes caller audio bytes via Groq's audio transcriptions endpoint."""
+    if not GROQ_API_KEY or not audio_bytes:
+        return ""
+
+    client = http_client
+    owns_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        owns_client = True
+
+    lang_hint = {"amharic": "am", "english": "en"}.get((language or "").lower())
+    form_data = {
+        "model": GROQ_AUDIO_MODEL,
+        "prompt": "Transcribe this phone call accurately in Amharic, English, or Oromo.",
+    }
+    if lang_hint:
+        form_data["language"] = lang_hint
+
+    try:
+        resp = await client.post(
+            f"{GROQ_BASE_URL}/audio/transcriptions",
+            headers=_groq_headers(),
+            files={"file": (filename, audio_bytes, mime_type)},
+            data=form_data,
+        )
+        resp.raise_for_status()
+        return str(resp.json().get("text") or "").strip()
+    except Exception as e:
+        logger.error(f"Live call transcription error: {e}")
+        return ""
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def generate_live_call_reply(session: CallSession, spoken_text: str) -> str:
+    """Generates a concise, phone-friendly AI reply using the store's catalog and Groq."""
+    store = session.store or {}
+    store_name = store.get("store_name", "Nexa Store")
+    inventory = store.get("inventory_data", "")
+    lang_directive = {
+        "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው እና ተፈጥሯዊ አማርኛ ተጠቀም።",
+        "english": "Respond clearly, politely, and concisely in English.",
+        "oromo": "Afaan Oromootiin gabaabsee ifaan deebisi.",
+    }.get(session.language, "በጣም የዳበረ እና ትክክለኛ አማርኛ ተጠቀም።")
+
+    system_prompt = (
+        f"You are the AI Voice Receptionist for {store_name}. "
+        f"Language Rule: {lang_directive} "
+        "Your answer will be spoken aloud on a live phone call. Keep replies clear, polite, "
+        "concise (2-3 sentences max), and grounded in the store catalog below.\n\n"
+        f"Catalog:\n{inventory}"
+    )
+    if not GROQ_API_KEY:
+        return "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
+
+    try:
+        reply = await generate_groq_text(
+            prompt=spoken_text,
+            system_instruction=system_prompt,
+            history_messages=session.messages[-6:],
+            temperature=0.5,
+            max_output_tokens=220,
+        )
+        session.messages.append({"role": "user", "content": spoken_text})
+        session.messages.append({"role": "assistant", "content": reply})
+        session.messages = session.messages[-8:]
+        return reply
+    except Exception as e:
+        logger.error(f"Live call Groq reply error: {e}")
+        return "ይቅርታ፣ አሁን መልስ ማዘጋጀት አልተቻለም። እባክዎ እንደገና ይሞክሩ።"
+
+
+async def synthesize_call_speech_bytes(reply_text: str, language: str = "amharic") -> bytes:
+    """Synthesizes Amharic/Oromo telephony audio bytes via Addis AI Voices 2."""
+    audio_bytes, _ = await synthesize_addis_speech_bytes(
+        text=reply_text,
+        language=language,
+        output_format="wav_44100",
+    )
+    return audio_bytes
+
+
+def _build_incoming_call_xml(stream_url: str, greeting_text: str) -> str:
+    safe_greeting = safe_escape_html(greeting_text)
+    safe_stream_url = safe_escape_html(stream_url)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<Response>\n"
+        f"  <Say>{safe_greeting}</Say>\n"
+        "  <Connect>\n"
+        f'    <Stream url="{safe_stream_url}" />\n'
+        "  </Connect>\n"
+        "</Response>"
+    )
+
+
+async def _get_voice_enabled_store(bot_token: str) -> tuple[dict | None, str | None]:
+    """Fetches a store by bot_token and verifies Tier 4 and active Voice AI status."""
+    store = None
+    if supabase:
+        try:
+            res = await asyncio.to_thread(
+                lambda: supabase.table("stores").select("*").eq("bot_token", bot_token).limit(1).execute()
+            )
+            if res.data:
+                store = res.data[0]
+        except Exception as e:
+            logger.error(f"Voice store lookup error: {e}")
+
+    if not store:
+        return None, "Store not found"
+    if store.get("voice_ai_active") is False:
+        return None, "AI Voice concierge is currently stopped by store owner"
+    if int(store.get("plan_tier") or 1) < 4:
+        return None, "AI Voice Call Receptionist requires Tier 4 (AI Voice Concierge)"
+    return store, None
+
+
+async def _log_phone_call_lead(bot_token: str, caller_phone: str, summary_text: str):
+    """Records a live voice call interaction in the store's leads table."""
+    if not supabase or not caller_phone:
+        return
+    try:
+        clean_phone = str(caller_phone).strip()
+        is_foreign = is_foreign_phone_or_client(raw_phone=clean_phone, raw_text=summary_text)
+        await append_one_by_one_lead_conversation(
+            bot_token=bot_token,
+            visitor_id=f"phone_{normalize_phone_digits(clean_phone) or clean_phone}",
+            visitor_name=f"Phone Caller ({clean_phone})",
+            phone_number=clean_phone,
+            user_turn=summary_text,
+            ai_turn="(Live Voice Call Answered)",
+            is_foreign=is_foreign,
+        )
+    except Exception as e:
+        logger.error(f"Live voice call lead logging error: {e}")
+
+
+@app.post("/api/voice-call-incoming/{bot_token}")
+async def ai_voice_call_incoming(bot_token: str, request: Request):
+    """Returns TwiML XML with bidirectional media stream URL for live Tier 4 phone calls."""
+    store, err_reason = await _get_voice_enabled_store(bot_token)
+    if not store:
+        safe_msg = safe_escape_html(err_reason or "Voice AI unavailable")
+        return Response(
+            content=f'<?xml version="1.0" encoding="UTF-8"?><Response><Say>{safe_msg}</Say><Hangup/></Response>',
+            media_type="application/xml",
+        )
+
+    ws_base = RENDER_EXTERNAL_URL.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+    stream_url = f"{ws_base}/api/voice-call-stream/{bot_token}"
+    store_name = store.get("store_name", "Nexa Store")
+    greeting = f"ሰላም! ወደ {store_name} የ AI ስልክ ረዳት በደህና መጡ። በምን ልረዳዎ እችላለሁ?"
+    xml_body = _build_incoming_call_xml(stream_url=stream_url, greeting_text=greeting)
+    return Response(content=xml_body, media_type="application/xml")
+
+
+@app.websocket("/api/voice-call-stream/{bot_token}")
+async def ai_voice_call_stream(websocket: WebSocket, bot_token: str):
+    """Handles live media stream chunks from telephony providers, runs Addis/Groq STT + LLM, and streams Addis TTS audio back."""
+    await websocket.accept()
+    store, err_reason = await _get_voice_enabled_store(bot_token)
+    if not store:
+        await websocket.send_json({"event": "error", "message": err_reason or "Voice AI unavailable"})
+        await websocket.close(code=1008)
+        return
+
+    session = CallSession(stream_sid="", store=store, language="amharic")
+
+    try:
+        while True:
+            raw_msg = await websocket.receive_text()
+            event_data = json.loads(raw_msg)
+            event_type = event_data.get("event")
+
+            if event_type == "start":
+                start_meta = event_data.get("start") or {}
+                session.stream_sid = str(start_meta.get("streamSid") or "")
+                session.caller_phone = str(start_meta.get("from") or start_meta.get("caller_phone") or "Unknown Caller")
+                if start_meta.get("language"):
+                    session.language = str(start_meta.get("language")).strip().lower()
+            elif event_type == "media":
+                media_payload = event_data.get("media") or {}
+                b64_chunk = media_payload.get("payload")
+                if b64_chunk:
+                    try:
+                        session.audio_chunks.append(base64.b64decode(b64_chunk))
+                    except Exception:
+                        pass
+            elif event_type in ("utterance_end", "mark", "stop"):
+                if session.audio_chunks and not session.busy:
+                    session.busy = True
+                    try:
+                        combined_audio = b"".join(session.audio_chunks)
+                        session.audio_chunks.clear()
+                        spoken_text = ""
+                        if ADDIS_API_KEY and session.language in ("amharic", "oromo"):
+                            spoken_text = await transcribe_audio_addis_stt(
+                                audio_bytes=combined_audio,
+                                filename="call_audio.wav",
+                                mime_type="audio/wav",
+                                language=session.language,
+                            )
+                        if not spoken_text:
+                            spoken_text = await transcribe_call_audio_groq(
+                                combined_audio,
+                                language=session.language,
+                            )
+                        if spoken_text:
+                            reply_text = await generate_live_call_reply(session, spoken_text)
+                            tts_bytes = await synthesize_call_speech_bytes(reply_text, language=session.language)
+                            await _log_phone_call_lead(bot_token, session.caller_phone, f"{spoken_text} -> {reply_text}")
+                            out_payload = {
+                                "event": "ai_reply",
+                                "streamSid": session.stream_sid,
+                                "transcript": spoken_text,
+                                "reply_text": reply_text,
+                            }
+                            if tts_bytes:
+                                out_payload["audio_base64"] = base64.b64encode(tts_bytes).decode("utf-8")
+                            await websocket.send_json(out_payload)
+                    finally:
+                        session.busy = False
+                if event_type == "stop":
+                    break
+    except WebSocketDisconnect:
+        logger.info(f"Live voice call stream disconnected for bot {bot_token[:8]}...")
+    except Exception as e:
+        logger.error(f"Live voice call stream error: {e}")
+
+
+# -------------------------------------------------------------------
 # Subscription & User Access Management
 # -------------------------------------------------------------------
 async def get_or_create_user_subscription(user_id: int) -> dict:
@@ -381,7 +1181,7 @@ async def get_or_create_user_subscription(user_id: int) -> dict:
                     "trial_expires": parse_dt(sub["trial_expires"]),
                     "credits_remaining": sub["credits_remaining"],
                     "is_pro": sub["is_pro"],
-                    "plan_tier": min(int(sub.get("plan_tier") or 1), 3),
+                    "plan_tier": sub.get("plan_tier", 1),
                 }
         except Exception as e:
             logger.error(f"Subscription fetch error: {e}")
@@ -454,10 +1254,10 @@ async def log_visitor(user_id: int):
 
 
 # -------------------------------------------------------------------
-# Telegram Voice Note Transcription via Groq Whisper
+# Telegram Voice Transcription via Addis Scribe + Groq Whisper Fallback
 # -------------------------------------------------------------------
 async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
-    if not http_client or not GROQ_API_KEY:
+    if not http_client or (not ADDIS_API_KEY and not GROQ_API_KEY):
         return ""
     try:
         file_resp = await http_client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={voice_file_id}")
@@ -468,17 +1268,29 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
         audio_bytes_resp = await http_client.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
         audio_data = bytes(audio_bytes_resp.content)
 
-        resp = await http_client.post(
-            f"{GROQ_BASE_URL}/audio/transcriptions",
-            headers=_groq_headers(),
-            files={"file": ("voice.ogg", audio_data, "audio/ogg")},
-            data={
-                "model": GROQ_AUDIO_MODEL,
-                "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
-            },
-        )
-        resp.raise_for_status()
-        return str(resp.json().get("text") or "").strip()
+        if ADDIS_API_KEY:
+            addis_text = await transcribe_audio_addis_stt(
+                audio_bytes=audio_data,
+                filename="voice.ogg",
+                mime_type="audio/ogg",
+                language="amharic",
+            )
+            if addis_text:
+                return addis_text
+
+        if GROQ_API_KEY:
+            resp = await http_client.post(
+                f"{GROQ_BASE_URL}/audio/transcriptions",
+                headers=_groq_headers(),
+                files={"file": ("voice.ogg", audio_data, "audio/ogg")},
+                data={
+                    "model": GROQ_AUDIO_MODEL,
+                    "prompt": "Transcribe this voice message accurately in Amharic, English, or Oromo.",
+                },
+            )
+            resp.raise_for_status()
+            return str(resp.json().get("text") or "").strip()
+        return ""
     except Exception as e:
         logger.error(f"Voice transcription error: {e}")
         return ""
@@ -494,6 +1306,7 @@ async def root_health():
         "netlify_project_id": NETLIFY_PROJECT_ID,
         "supabase_connected": bool(supabase),
         "groq_connected": bool(GROQ_API_KEY),
+        "addis_connected": bool(ADDIS_API_KEY),
         "telegram_connected": bool(TELEGRAM_BOT_TOKEN),
         "webhook_secured": bool(TELEGRAM_WEBHOOK_SECRET),
     }
@@ -896,7 +1709,7 @@ async def admin_dashboard(pwd: str = ""):
         <tr class="border-b border-slate-800 hover:bg-slate-900/50 transition">
             <td class="p-4 font-medium text-white">{safe_escape_html(l.get('visitor_name', 'Anonymous'))}</td>
             <td class="p-4 text-emerald-400 font-mono">{safe_escape_html(l.get('phone_number', 'No Phone ❌'))}</td>
-            <td class="p-4 text-slate-300 text-sm">{safe_escape_html(l.get('interest_summary', 'General Inquiry'))}</td>
+            <td class="p-4 text-slate-300 text-sm whitespace-pre-line">{safe_escape_html(l.get('interest_summary', 'General Inquiry'))}</td>
             <td class="p-4 font-mono text-xs text-slate-500">{safe_escape_html(l.get('visitor_telegram_id'))}</td>
         </tr>
         """
@@ -985,7 +1798,7 @@ async def admin_dashboard(pwd: str = ""):
                 <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse">
                         <tr class="bg-slate-950 text-slate-400 text-xs font-bold uppercase tracking-wider border-b border-slate-800">
-                            <th class="p-4">Customer Name</th><th class="p-4">Phone Number</th><th class="p-4">Inquiry / Summary</th><th class="p-4">Telegram Chat ID</th>
+                            <th class="p-4">Customer Name</th><th class="p-4">Phone Number</th><th class="p-4">One-by-One Conversation Log</th><th class="p-4">Telegram Chat ID</th>
                         </tr>
                         {leads_html or '<tr><td colspan="4" class="p-8 text-center text-slate-500">No customer questions recorded yet.</td></tr>'}
                     </table>
@@ -1026,6 +1839,7 @@ async def admin_dashboard(pwd: str = ""):
                             <option value="1">Tier 1 (Starter - 1,000 ETB/mo)</option>
                             <option value="2">Tier 2 (Business Pro - 2,500 ETB/mo)</option>
                             <option value="3">Tier 3 (Enterprise VIP - 5,000 ETB/mo)</option>
+                            <option value="4">Tier 4 (AI Voice & Foreign Client Concierge - 7,000 ETB/mo)</option>
                         </select>
                     </div>
                     <div>
@@ -1203,7 +2017,7 @@ async def admin_payment_action_json(data: ReviewActionJSONModel, x_admin_passwor
         return {"status": "error", "message": "Supabase not connected"}
 
     user_id = str(data.user_id)
-    plan_tier = min(max(int(data.plan_tier or 1), 1), 3)
+    plan_tier = int(data.plan_tier or 1)
     review_id = int(data.review_id)
 
     try:
@@ -1231,9 +2045,24 @@ async def admin_payment_action_json(data: ReviewActionJSONModel, x_admin_passwor
                 reference_id=f"REV-{review_id}",
             )
             if http_client and TELEGRAM_BOT_TOKEN:
+                tier4_msg = ""
+                if plan_tier >= 4:
+                    st_phone = ""
+                    st_tok = ""
+                    try:
+                        st_q = await asyncio.to_thread(
+                            lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", user_id).limit(1).execute()
+                        )
+                        if st_q.data:
+                            st_phone = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                            st_tok = st_q.data[0].get("bot_token") or ""
+                    except Exception:
+                        pass
+                    exclusive_url = build_merchant_exclusive_call_url(phone=st_phone, bot_token=st_tok)
+                    tier4_msg = f"\n\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{exclusive_url}`"
                 await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
                     "chat_id": int(user_id),
-                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።",
+                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።{tier4_msg}",
                     "parse_mode": "Markdown",
                 })
         else:
@@ -1260,8 +2089,6 @@ async def admin_payment_action(
     if not verify_admin_pwd(pwd):
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    plan_tier = min(max(int(plan_tier or 1), 1), 3)
-
     if supabase:
         if decision == "approve":
             credits = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])["credits"]
@@ -1287,9 +2114,24 @@ async def admin_payment_action(
                 reference_id=f"REV-{review_id}",
             )
             if http_client and TELEGRAM_BOT_TOKEN:
+                tier4_msg = ""
+                if plan_tier >= 4:
+                    st_phone = ""
+                    st_tok = ""
+                    try:
+                        st_q = await asyncio.to_thread(
+                            lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", str(user_id)).limit(1).execute()
+                        )
+                        if st_q.data:
+                            st_phone = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                            st_tok = st_q.data[0].get("bot_token") or ""
+                    except Exception:
+                        pass
+                    exclusive_url = build_merchant_exclusive_call_url(phone=st_phone, bot_token=st_tok)
+                    tier4_msg = f"\n\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{exclusive_url}`"
                 await http_client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
                     "chat_id": int(user_id),
-                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።",
+                    "text": f"🎉 ክፍያዎ ተረጋግጧል! አሁን ወደ Tier {plan_tier} ሙሉ በሙሉ አድገዋል።{tier4_msg}",
                     "parse_mode": "Markdown",
                 })
         else:
@@ -1552,7 +2394,7 @@ async def generate_professor_economic_advice(update: Update, context: ContextTyp
     - Do not mix random English sentences or broken filler phrases; keep terminology clear and professional in Amharic.
     - Keep the chat natural and interactive: reference what the user just asked or told you in earlier chat turns so it feels like a real ongoing mentoring conversation.
     - Address relevant legal and regulatory business considerations (proper business licensing, tax and receipt compliance, authentic goods/services, transparent customer terms, and data trust) clearly and professionally in plain Amharic, without acting as a formal courtroom lawyer.
-    - Incorporate current platform capabilities and announcements ({announcements_context or "ባለሦስት ደረጃ የ AI መደብር ቦቶች፣ የቴሌብር ደረሰኝ ማረጋገጫ፣ የ25% አጋርነት ፕሮግራም እና የ AI የደንበኛ መረጃ አሰባሰብ"}).
+    - Incorporate current platform capabilities and announcements ({announcements_context or "ባለአራት ደረጃ የ AI መደብር ቦቶች፣ የቴሌብር ደረሰኝ ማረጋገጫ፣ የ25% አጋርነት ፕሮግራም እና የ AI የደንበኛ መረጃ አሰባሰብ"}).
     - Weave natural, high-impact Amharic hook phrases into your response and end with a conversational chat hook inviting their next reply (ለምሳሌ፡- "በጣም ጠቃሚ እና ወሳኝ ነጥብ ነው! ይህን እድል በንግድዎ እንዴት በብቃት ልንተገብረው እንችላለን?", "አንድ ወሳኝ ጥያቄ ላንሳልዎ — በአሁኑ ወቅት ለንግድዎ ቅድሚያ የሚሰጠው አዲስ ደንበኛ ማፍራት ነው ወይስ የትርፍ ህዳግ ማሳደግ?", "ቀጥሉ — ስለዚህ ሐሳብ ምን ይሰማዎታል? በዝርዝር እንነጋገርበት።").
     - Mention Nexa revenue tools (`/register` for automated AI sales bots, `/partner` for the 25% partner program) naturally and professionally only when directly relevant.
 
@@ -1634,7 +2476,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lambda: supabase.table("stores").select("plan_tier").eq("owner_telegram_id", str(user_id)).execute()
             )
             if store_res.data:
-                tier_num = min(int(store_res.data[0].get("plan_tier") or 1), 3)
+                tier_num = store_res.data[0].get("plan_tier", 1)
                 store_tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
         except Exception as e:
             logger.error(f"Store tier check error: {e}")
@@ -1764,27 +2606,41 @@ async def my_bots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = await asyncio.to_thread(
-            lambda: supabase.table("stores").select("id, store_name, bot_token, ui_theme, plan_tier, business_phone, owner_phone").eq("owner_telegram_id", owner_id).execute()
+            lambda: supabase.table("stores").select("id, store_name, bot_token, ui_theme, plan_tier, business_phone, owner_phone, voice_ai_active").eq("owner_telegram_id", owner_id).execute()
         )
         if not res.data:
             await update.effective_message.reply_text("⚠️ እስካሁን የተፈጠረ ንቁ ቦት የለዎትም። የመጀመሪያውን የ AI ቦት ለመፍጠር /register ይጠቀሙ!")
             return
 
         bots_list_text = "🤖 የእርስዎ የ AI ቦቶች ዳሽቦርድ\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        exclusive_buttons = []
         for _, store in enumerate(res.data, 1):
             token_val = store.get("bot_token", "")
             masked_token = token_val[:8] + "..." + token_val[-4:] if len(token_val) > 12 else "***"
-            tier_num = min(int(store.get("plan_tier") or 1), 3)
+            tier_num = store.get("plan_tier", 1)
             tier_name = TIER_CONFIG.get(tier_num, TIER_CONFIG[1])["name"]
             bus_phone = store.get("business_phone") or store.get("owner_phone") or "አልተመዘገበም ❌"
+            voice_status = "🟢 በሥራ ላይ (Active)" if store.get("voice_ai_active", True) else "🛑 ቆሟል (Paused)"
+            exclusive_link_line = ""
+            if int(tier_num) >= 4:
+                exclusive_url = build_merchant_exclusive_call_url(
+                    phone=bus_phone if bus_phone != "አልተመዘገበም ❌" else "",
+                    bot_token=token_val,
+                    store_id=str(store.get("id") or ""),
+                )
+                exclusive_link_line = f"• 🔗 **የእርስዎ ብቻ የ Tier 4 Call Link (ለመቅዳት ይጫኑ):** `{exclusive_url}`\n"
+                exclusive_buttons.append([InlineKeyboardButton(f"📋 ሊንክ ይቅዱ ({store['store_name']})", callback_data=f"copy_url_alert_{abs(hash(exclusive_url)) % 100000000}")])
             bots_list_text += (
                 f"🤖 **{store['store_name']}**\n"
                 f"• ዕቅድ / ፕላን: {tier_name}\n"
                 f"• የንግድ ስልክ ቁጥር: `{bus_phone}`\n"
+                f"{exclusive_link_line}"
+                f"• የድምጽ ስልክ ረዳት: {voice_status}\n"
                 f"• ቶከን ቁልፍ: `{masked_token}`\n"
                 f"• የቦት ዘይቤ: {store.get('ui_theme', 'executive').capitalize()}\n\n"
             )
-        await update.effective_message.reply_text(bots_list_text, parse_mode="Markdown")
+        reply_mk = InlineKeyboardMarkup(exclusive_buttons) if exclusive_buttons else None
+        await update.effective_message.reply_text(bots_list_text, reply_markup=reply_mk, parse_mode="Markdown")
     except Exception as e:
         await update.effective_message.reply_text(f"ቦቶችን ማምጣት አልተቻለም: {str(e)}")
 
@@ -1814,7 +2670,11 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"  _(Advanced AI, Photo Catalogs, Priority Leads)_\n\n"
         f"• **Tier 3 (Enterprise VIP)**: 5,000 ብር / ወር\n"
         f"  _(Unlimited AI, Full Photo & Video Streaming, VIP Concierge)_\n\n"
+        f"• **Tier 4 (AI Voice & Foreign Client Concierge)**: 7,000 ብር / ወር\n"
+        f"  _(Foreign Client Global Communication, Live AI Voice Calls & Automated Phone Receptionist in Amharic & English)_\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✨ **ለምን ወደ Tier 4 AI Voice ያሻሽላሉ?**\n"
+        f"የድርጅትዎን ስልክ ቁጥር ከ Nexa AI ጋር በማገናኘት የውጭ አገር እና የሀገር ውስጥ ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ በንግድዎ ካታሎግ መሰረት በቀጥታ በስልክ ያነጋግሯቸዋል!\n\n"
         f"እባክዎ ክፍያ ለመፈጸም ከታች ካሉት ዕቅዶች አንዱን ይምረጡ:"
     )
 
@@ -1822,6 +2682,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_pay_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_pay_2")],
         [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_pay_3")],
+        [InlineKeyboardButton("💎 Tier 4: AI Voice & Global Concierge (7,000 ብር / ወር)", callback_data="tier_pay_4")],
     ]
 
     if update.callback_query:
@@ -1834,7 +2695,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_tier_upgrade_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, tier_num: int):
-    context.user_data["selected_tier"] = min(max(int(tier_num), 1), 3)
+    context.user_data["selected_tier"] = tier_num
     context.user_data["payment_step"] = "awaiting_payer_name"
 
     target_msg = update.callback_query.message if update.callback_query else update.effective_message
@@ -1894,53 +2755,8 @@ async def show_store_leads_and_analytics(message_target, bot_token: str, store_n
         )
         total_bot_visitors = vis_res.count if vis_res.count is not None else len(vis_res.data or [])
         leads_data = leads_res.data or []
+        full_text = format_simplified_one_by_one_panel(leads_data, store_name, total_bot_visitors)
 
-        high_intent_count = 0
-        vip_payer_count = 0
-
-        for lead in leads_data:
-            intent_val = str(lead.get("intent_level", "low")).lower()
-            is_vip = bool(lead.get("is_high_payer", False))
-            if is_vip:
-                vip_payer_count += 1
-            if intent_val in ["high", "vip"] or is_vip:
-                high_intent_count += 1
-
-        analytics_header = (
-            f"📊 **የእርስዎ ቦት ጎብኚዎች እና ስታቲስቲክስ — {store_name}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• ጠቅላላ የቦት ጎብኚዎች (Total Visitors): {total_bot_visitors} ተጠቃሚዎች\n"
-            f"• ንቁ የውይይት ተሳታፊዎች: {len(leads_data)} ተጠቃሚዎች\n"
-            f"• 💎 ከፍተኛ ከፋዮች (VIP High-Payers): {vip_payer_count} ተጠቃሚዎች\n"
-            f"• 🔥 ለመግዛት የተዘጋጁ (High-Intent Leads): {high_intent_count} ተጠቃሚዎች\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📋 **በ AI የተተነተነ የደንበኞች እና ስልክ ቁጥሮች ዝርዝር:**\n"
-        )
-
-        lines = [analytics_header]
-        for idx, lead in enumerate(leads_data[:25], start=1):
-            raw_name = str(lead.get("visitor_name") or "").strip()
-            name = raw_name if raw_name and raw_name.lower() not in ["anonymous", "none", "null", "unknown"] else f"ደንበኛ #{lead.get('visitor_telegram_id', idx)}"
-            phone = lead.get("phone_number") or "አልሰጠም ❌"
-            chat_id_val = lead.get("visitor_telegram_id") or "N/A"
-            summary = lead.get("interest_summary") or "አጠቃላይ ፍለጋ"
-            is_vip = bool(lead.get("is_high_payer", False))
-
-            intent_badge = "💎 ከፍተኛ ከፋይ (VIP High-Payer)" if is_vip else "💬 ንቁ ደንበኛ (Lead)"
-
-            lines.append(
-                f"**{idx}. የደንበኛ ስም:** {name}\n"
-                f"   📞 **ስልክ ቁጥር:** `{phone}`\n"
-                f"   🆔 **ቴሌግራም ID (Chat ID):** `{chat_id_val}`\n"
-                f"   📌 **የውይይት ማጠቃለያ:** _{summary}_\n"
-                f"   🏷️ **ሁኔታ:** {intent_badge}\n"
-                f"   ──────────────────────────\n"
-            )
-
-        if not leads_data:
-            lines.append("📭 እስካሁን ቦትዎን የጎበኘ ወይም ስልክ ቁጥር የሰጠ ደንበኛ የለም።")
-
-        full_text = "\n".join(lines)
         if hasattr(message_target, "edit_text"):
             try:
                 await message_target.edit_text(full_text, parse_mode="Markdown")
@@ -2145,7 +2961,7 @@ async def run_ai_system_audit_and_heal(target_owner_id: str | None = None) -> st
             valid_themes = ["executive", "sales", "friendly", "minimalist", "energetic"]
             if store.get("ui_theme") not in valid_themes:
                 updates_needed["ui_theme"] = "executive"
-            if store.get("plan_tier") not in [1, 2, 3]:
+            if store.get("plan_tier") not in [1, 2, 3, 4]:
                 updates_needed["plan_tier"] = 1
 
             if updates_needed:
@@ -2256,6 +3072,7 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🥉 Tier 1: Starter (1,000 ብር / ወር)", callback_data="tier_1")],
         [InlineKeyboardButton("🥈 Tier 2: Business Pro (2,500 ብር / ወር)", callback_data="tier_2")],
         [InlineKeyboardButton("🥇 Tier 3: Enterprise VIP (5,000 ብር / ወር)", callback_data="tier_3")],
+        [InlineKeyboardButton("💎 Tier 4: AI Voice & Global Concierge (7,000 ብር / ወር)", callback_data="tier_4")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -2263,7 +3080,8 @@ async def receive_ui_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "እርምጃ 4 ከ 6: የሚፈልጉትን የአገልግሎት ደረጃ (Tier) ይምረጡ:\n"
         "• **Tier 1:** የላቀ AI + የጽሁፍ ካታሎግ + የፎቶ ድጋፍ\n"
         "• **Tier 2:** የላቀ AI + የፎቶ ካታሎግ + የላቀ የደንበኛ ክትትል\n"
-        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ",
+        "• **Tier 3:** ያልተወሰነ AI + ሙሉ የፎቶ እና ቪዲዮ ስትሪሚንግ ድጋፍ\n"
+        "• **Tier 4:** ሁሉም የ VIP አገልግሎቶች + ከውጭ አገር ደንበኞች ጋር መግባቢያ + በቀጥታ የሚሰራ የ AI ድምጽ ስልክ ረዳት",
         reply_markup=reply_markup,
         parse_mode="Markdown",
     )
@@ -2275,7 +3093,7 @@ async def receive_plan_tier(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        tier_num = min(max(int(query.data.replace("tier_", "")), 1), 3)
+        tier_num = int(query.data.replace("tier_", ""))
         target_message = query.edit_message_text
     else:
         tier_num = 1
@@ -2347,7 +3165,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
     store_name = context.user_data.get("store_name", "My Store")
     inventory_data = context.user_data.get("inventory_data", "No inventory specified")
     ui_theme = context.user_data.get("ui_theme", "executive")
-    plan_tier = min(max(int(context.user_data.get("plan_tier", 1)), 1), 3)
+    plan_tier = context.user_data.get("plan_tier", 1)
     bot_token = context.user_data.get("bot_token")
 
     tenant_webhook_url = f"{RENDER_EXTERNAL_URL}/tenant-webhook/{bot_token}"
@@ -2385,6 +3203,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "plan_tier": plan_tier,
                 "owner_phone": phone_input,
                 "business_phone": phone_input,
+                "voice_ai_active": True,
             }
             await asyncio.to_thread(
                 lambda: supabase.table("stores").upsert(store_payload, on_conflict="bot_token").execute()
@@ -2408,18 +3227,32 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return ConversationHandler.END
 
     tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+    tier4_link_section = ""
     extra_buttons = [
         [InlineKeyboardButton("🚀 አባልነት ማሻሻያ (Upgrade / Pay)", callback_data="buy_pro")],
         [InlineKeyboardButton("⚡ የንግድ ቻት አማካሪ (/advice)", callback_data="business_advice_menu")],
         [InlineKeyboardButton("📊 የጎብኚዎች ማጠቃለያ (/summary)", callback_data="view_summary")],
     ]
+    if int(plan_tier) >= 4:
+        personal_call_url = build_merchant_exclusive_call_url(
+            phone=phone_input,
+            bot_token=bot_token or "",
+            store_id=store_name,
+        )
+        tier4_link_section = (
+            f"\n🔗 **ለእርስዎ ብቻ የተዘጋጀ የ Tier 4 Call Link (ለመቅዳት በሊንኩ ላይ ይጫኑ):**\n"
+            f"`{personal_call_url}`\n"
+            f"_(ደንበኞችዎ ይህን ሊንክ ሲጠቀሙ የእርስዎን መደብር ካታሎግ ብቻ ያገኛሉ — ከሌሎች መደብሮች ጋር አይቀላቀልም።)_\n"
+        )
+        extra_buttons.insert(0, [InlineKeyboardButton("📋 የ Tier 4 ሊንክ ለመቅዳት ይጫኑ", callback_data=f"copy_url_alert_{abs(hash(personal_call_url)) % 100000000}")])
 
     cool_advert_text = (
         f"🤖 **የንግድ መደብር ቦትዎ በተሳካ ሁኔታ ተፈጥሯል!**\n\n"
         f"እንኳን ደስ አለዎት! የንግድ መደብርዎ **{store_name}** (ስልክ: `{phone_input}`) በዘመናዊ የ AI ሻጭ ረዳት ተዋቅሯል።\n"
         f"• የነጻ ሙከራ ጊዜ: **3 ቀናት** በሥራ ላይ ውሏል\n"
         f"• የተመረጠው ዕቅድ: {tier_info['name']}\n"
-        f"• የተመዘገበ የንግድ ስልክ: `{phone_input}`\n\n"
+        f"• የድምጽ ስልክ ረዳት: `{phone_input}` ከ ሲስተሙ ጋር ተገናኝቷል!\n"
+        f"{tier4_link_section}\n"
         f"💡 አሁን `/pay` በመጫን ወይም ከታች ባለው ሊንክ አባልነትዎን ማሻሻል ይችላሉ!"
     )
 
@@ -2428,7 +3261,7 @@ async def receive_store_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # -------------------------------------------------------------------
-# Phone Number Control Commands
+# Phone Number & AI Voice Control Commands
 # -------------------------------------------------------------------
 async def select_phone_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2533,7 +3366,45 @@ async def receive_updated_phone(update: Update, context: ContextTypes.DEFAULT_TY
             await update.effective_message.reply_text(f"⚠️ ስልክ ቁጥሩን ማሻሻል አልተቻለም: {str(e)}")
 
     context.user_data.pop("target_bot_token_for_phone", None)
-    return CHANGE_PHONE
+    return ConversationHandler.END
+
+
+async def stop_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"voice_ai_active": False}).eq("owner_telegram_id", owner_id).execute()
+        )
+        await update.effective_message.reply_text(
+            "🛑 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በጊዜያዊነት ቆሟል።**\n\n"
+            "ደንበኞችዎ ሲደውሉ AI ድምጽ ረዳቱ አያነጋግራቸውም። እንደገና ለማስጀመር `/startvoice` የሚለውን ይጠቀሙ።",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"ስራውን ማቆም አልተቻለም: {str(e)}")
+
+
+async def start_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = str(update.effective_user.id)
+    if not supabase:
+        await update.effective_message.reply_text("የዳታቤዝ ግንኙነት የለም።")
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("stores").update({"voice_ai_active": True}).eq("owner_telegram_id", owner_id).execute()
+        )
+        await update.effective_message.reply_text(
+            "🟢 **የ AI ድምጽ ስልክ ረዳት (AI Voice Concierge) አገልግሎት በድጋሚ በሥራ ላይ ውሏል!**\n\n"
+            "አሁን ደንበኞችዎ ወደ ንግድ ስልክ ቁጥርዎ ሲደውሉ Groq AI በሰዓቱ በስልክ ይመልስላቸዋል።",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"አገልግሎቱን ማስጀመር አልተቻለም: {str(e)}")
 
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2592,6 +3463,62 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # -------------------------------------------------------------------
+# Tier 4 AI Voice Call Receptionist Endpoint
+# -------------------------------------------------------------------
+@app.post("/api/voice-call-webhook/{bot_token}")
+async def ai_voice_call_webhook(bot_token: str, request: Request):
+    data = await request.json()
+    caller_phone = data.get("caller_phone") or data.get("From", "Unknown Caller")
+    spoken_text = data.get("spoken_text") or data.get("SpeechResult", "")
+    lang = str(data.get("language") or "amharic").strip().lower()
+
+    store, err_reason = await _get_voice_enabled_store(bot_token)
+    if not store:
+        status_code = "not_found" if err_reason == "Store not found" else ("paused" if "stopped" in (err_reason or "") else "unauthorized")
+        return {"status": status_code, "message": err_reason}
+
+    inventory = store.get("inventory_data", "")
+    store_name = store.get("store_name", "Nexa Store")
+
+    system_prompt = (
+        f"You are the professional AI Voice & Foreign Client Receptionist for company {store_name}. "
+        "Your responses will be spoken aloud to local and foreign callers via Text-to-Speech in Amharic or English. "
+        "Keep answers polite, concise, natural, and directly helpful based on the store catalog below.\n\n"
+        f"Catalog:\n{inventory}"
+    )
+
+    ai_response = "ሰላም! የድርጅታችን የ AI ስልክ ረዳት ነኝ። በምን ልረዳዎ እችላለሁ?"
+    if GROQ_API_KEY and spoken_text:
+        try:
+            ai_response = await generate_groq_text(
+                prompt=spoken_text,
+                system_instruction=system_prompt,
+                temperature=0.5,
+                max_output_tokens=250,
+            )
+        except Exception as e:
+            logger.error(f"Voice AI generation error: {e}")
+
+    await _log_phone_call_lead(bot_token, caller_phone, f"{spoken_text} -> {ai_response}")
+
+    audio_base64 = None
+    if ADDIS_API_KEY and lang in ("amharic", "oromo"):
+        tts_bytes, _ = await synthesize_addis_speech_bytes(text=ai_response, language=lang, output_format="mp3_44100")
+        if tts_bytes:
+            audio_base64 = base64.b64encode(tts_bytes).decode("utf-8")
+
+    return {
+        "status": "success",
+        "store_name": store_name,
+        "caller_phone": caller_phone,
+        "ai_reply_text": ai_response,
+        "tts_ready": True,
+        "addis_tts_ready": bool(ADDIS_API_KEY),
+        "audio_base64": audio_base64,
+    }
+
+
+# -------------------------------------------------------------------
 # Admin Sync Tier, Support Reply, Payouts & Broadcast Endpoints
 # -------------------------------------------------------------------
 class TierSyncModel(BaseModel):
@@ -2629,7 +3556,7 @@ class AffiliatePayoutModel(BaseModel):
 
 class StoreActionModel(BaseModel):
     bot_token: str
-    action: str  # "delete_store"
+    action: str  # "pause_voice", "resume_voice", "delete_store"
     pwd: str = ""
 
 
@@ -2642,7 +3569,11 @@ async def admin_store_action(data: StoreActionModel, x_admin_password: str | Non
         return {"status": "error", "message": "Supabase not connected"}
 
     try:
-        if data.action == "delete_store":
+        if data.action == "pause_voice":
+            await asyncio.to_thread(lambda: supabase.table("stores").update({"voice_ai_active": False}).eq("bot_token", data.bot_token).execute())
+        elif data.action == "resume_voice":
+            await asyncio.to_thread(lambda: supabase.table("stores").update({"voice_ai_active": True}).eq("bot_token", data.bot_token).execute())
+        elif data.action == "delete_store":
             await asyncio.to_thread(lambda: supabase.table("stores").delete().eq("bot_token", data.bot_token).execute())
             if http_client:
                 await http_client.post(f"https://api.telegram.org/bot{data.bot_token}/deleteWebhook")
@@ -2805,7 +3736,7 @@ async def sync_tier(data: TierSyncModel, x_admin_password: str | None = Header(N
         return {"status": "error", "message": "Unauthorized password"}
 
     user_id_str = str(data.user_id)
-    tier = min(max(int(data.plan_tier), 1), 3)
+    tier = int(data.plan_tier)
     months = int(data.months or 1)
 
     now = datetime.now(timezone.utc)
@@ -2833,11 +3764,25 @@ async def sync_tier(data: TierSyncModel, x_admin_password: str | None = Header(N
     if TELEGRAM_BOT_TOKEN:
         try:
             tier_name = TIER_CONFIG.get(tier, TIER_CONFIG[1])["name"] if tier > 0 else "Free Tier (Level 0)"
+            tier4_url_block = ""
+            if tier >= 4 and supabase:
+                try:
+                    st_q = await asyncio.to_thread(
+                        lambda: supabase.table("stores").select("business_phone, owner_phone, bot_token").eq("owner_telegram_id", user_id_str).limit(1).execute()
+                    )
+                    if st_q.data:
+                        p_val = st_q.data[0].get("business_phone") or st_q.data[0].get("owner_phone") or ""
+                        t_val = st_q.data[0].get("bot_token") or ""
+                        ex_url = build_merchant_exclusive_call_url(phone=p_val, bot_token=t_val)
+                        tier4_url_block = f"\n🔗 **የእርስዎ ብቻ የ Tier 4 Call Link:**\n`{ex_url}`\n"
+                except Exception:
+                    pass
             alert_text = (
                 f"⚡ **የአካውንትዎ Tier እና የቆይታ ጊዜ በአስተዳዳሪው ተሻሽሏል!**\n\n"
                 f"• አዲስ ዕቅድ: **{tier_name} (Level {tier})**\n"
                 f"• የቆይታ ጊዜ: **{months} ወር(ዎች)**\n"
-                f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n\n"
+                f"• የሚያበቃበት ቀን: `{expires_at.strftime('%Y-%m-%d %H:%M UTC')}`\n"
+                f"{tier4_url_block}\n"
                 f"🚀 አሁን የ Nexa AI አገልግሎቶች በአዲሱ ደረጃ በሥራ ላይ ውለዋል!"
             )
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -2911,6 +3856,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_tier_upgrade_flow(update, context, 2)
     elif query.data in ["upgrade_tier_3", "tier_pay_3", "tier_3"]:
         await start_tier_upgrade_flow(update, context, 3)
+    elif query.data in ["upgrade_tier_4", "tier_pay_4", "tier_4"]:
+        await start_tier_upgrade_flow(update, context, 4)
     elif query.data == "partner_menu":
         await partner_command(update, context)
     elif query.data == "support_menu":
@@ -3267,7 +4214,7 @@ async def handle_master_message(update: Update, context: ContextTypes.DEFAULT_TY
 
         user_id = update.effective_user.id
         owner_id = str(user_id)
-        tier_num = min(max(int(context.user_data.get("selected_tier", 1)), 1), 3)
+        tier_num = context.user_data.get("selected_tier", 1)
         payer_name = context.user_data.get("payer_name", "Valued Customer")
 
         store_name = "Nexa Store"
@@ -3451,6 +4398,8 @@ if telegram_app:
     telegram_app.add_handler(CommandHandler("summary", summary_command))
     telegram_app.add_handler(CommandHandler("weekly_summary", weekly_summary_command))
     telegram_app.add_handler(CommandHandler("mybots", my_bots_command))
+    telegram_app.add_handler(CommandHandler("stopvoice", stop_voice_command))
+    telegram_app.add_handler(CommandHandler("startvoice", start_voice_command))
     telegram_app.add_handler(conv_handler)
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
     telegram_app.add_handler(MessageHandler((filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"^/addmedia"), handle_media_upload))
@@ -3660,7 +4609,7 @@ async def tenant_bot_webhook(bot_token: str, request: Request):
         "ui_theme": store.get("ui_theme", "executive"),
         "history_messages": history_messages,
         "available_tags": available_tags,
-        "plan_tier": min(int(store.get("plan_tier") or 1), 3),
+        "plan_tier": store.get("plan_tier", 1),
         "business_phone": store.get("business_phone") or store.get("owner_phone") or "",
     }
 
@@ -3694,7 +4643,7 @@ async def analyze_and_upsert_lead(
     Return strictly valid JSON with these exact keys:
     {{
         "customer_name": "extracted real name or '{visitor_name}'",
-        "phone_number": "extracted Ethiopian phone (+251... or 09.../07...) or null",
+        "phone_number": "extracted Ethiopian or international phone (+251..., +1..., or 09.../07...) or null",
         "requested_items": "concise summary of specific products/services they want",
         "estimated_budget": 0,
         "intent_level": "high" or "medium" or "low",
@@ -3714,13 +4663,8 @@ async def analyze_and_upsert_lead(
 
         phone = structured_data.get("phone_number")
         if not phone:
-            phone_match = re.search(r"(\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
+            phone_match = re.search(r"(\+\d{7,15}|\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
             phone = phone_match.group(0) if phone_match else None
-
-        intent_lvl = str(structured_data.get("intent_level", "low")).lower()
-        action_summary = structured_data.get("action_summary") or user_text[:100]
-        is_vip = bool(structured_data.get("is_high_payer", False))
-        vip_prefix = "💎 VIP | " if is_vip else ""
 
         extracted_name = str(structured_data.get("customer_name") or "").strip()
         if not extracted_name or extracted_name.lower() in ["anonymous", "unknown", "none", "null", "user"]:
@@ -3732,7 +4676,6 @@ async def analyze_and_upsert_lead(
             "bot_token": bot_token,
             "visitor_telegram_id": str(chat_id),
             "visitor_name": final_visitor_name,
-            "interest_summary": f"[{intent_lvl.upper()}] {vip_prefix}{action_summary}",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if phone:
@@ -3760,7 +4703,7 @@ async def store_chat_webhook(payload: dict):
     ui_theme = payload.get("ui_theme", "executive")
     history_messages = payload.get("history_messages", [])
     available_tags = payload.get("available_tags", [])
-    plan_tier = min(int(payload.get("plan_tier") or 1), 3)
+    plan_tier = payload.get("plan_tier", 1)
     registered_phone = payload.get("business_phone", "")
 
     if owner_telegram_id:
@@ -3773,9 +4716,9 @@ async def store_chat_webhook(payload: dict):
                         json={"chat_id": chat_id, "text": "⚠️ የቦቱ የፈተና ጊዜ አልቋል። እባክዎ የቦቱን ባለቤት ያነጋግሩ።"},
                     )
                 return {"ok": True}
-            asyncio.create_task(deduct_credit(owner_id_int))
+            await deduct_credit(owner_id_int)
         except Exception as e:
-            logger.error(f"Subscription enforcement error: {e}")
+            logger.error(f"Tenant credit deduction error: {e}")
 
     if http_client:
         asyncio.create_task(http_client.post(
@@ -3785,133 +4728,165 @@ async def store_chat_webhook(payload: dict):
 
     phone_matches = re.findall(r"(?:\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
     if phone_matches and registered_phone and normalize_phone_digits(phone_matches[0]) == normalize_phone_digits(registered_phone):
-        ai_reply = await answer_registered_phone_with_ai(
+        phone_ai_reply = await answer_registered_phone_with_ai(
             raw_phone=phone_matches[0],
             user_question=user_text,
             store_record={
                 "store_name": store_name,
                 "business_phone": registered_phone,
                 "plan_tier": plan_tier,
-                "inventory_data": inventory_data,
                 "voice_ai_active": True,
+                "inventory_data": inventory_data,
             },
             customer_lang=customer_lang,
             history_messages=history_messages,
         )
-    else:
-        lang_instructions = {
-            "amharic": "በጣም የዳበረ፣ ሰዋሰዋዊ ትክክለኛነት ያለው፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ የሆነ ንጹህ አማርኛ ቋንቋ ብቻ ተጠቀም።",
-            "english": "Respond in English.",
-            "oromo": "Afaan Oromootiin deebisi.",
-        }
-
-        theme_prompts = {
-            "energetic": "Be highly energetic, exciting, friendly, and action-oriented.",
-            "friendly": "Be warm, welcoming, approachable, and helpful.",
-            "executive": "Be a professional executive VIP concierge, polished and authoritative.",
-            "sales": "Be conversion-focused, direct, highlighting value and urgency.",
-            "minimalist": "Be direct, concise, and straight to the point.",
-        }
-
-        tier_capabilities = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
-        tags_str = ", ".join(available_tags) if available_tags else "None"
-        phone_context_line = f"Registered Store Phone in Nexa: {registered_phone}" if registered_phone else "Registered Store Phone in Nexa: Not set"
-
-        system_prompt = f"""
-        You are an advanced, intelligent AI sales and analytical assistant for {store_name}.
-        Tone/Theme Style: {theme_prompts.get(ui_theme, theme_prompts['executive'])}
-        Language Rule: {lang_instructions.get(customer_lang, lang_instructions['amharic'])}
-        Store Plan Tier: {tier_capabilities['name']} ({tier_capabilities['features']})
-        {phone_context_line}
-
-        Core Directives & Analytical Approach:
-        - Deeply analyze the customer's request and intelligently match/relate it with the Live Store Catalog Data provided below.
-        - Provide smart, flexible, and well-reasoned answers. Do not mechanically repeat text; analyze what the customer is looking for and present the most relevant items, pricing, features, or solutions accurately.
-        - When responding in Amharic, strictly enforce native Ethiopian Amharic grammar, proper Ge'ez fidel spelling, natural phrasing, and polite business etiquette without any awkward literal translations or spelling mistakes.
-        - If the customer asks to see photos, pictures, or videos of a property, item, or service, and a matching tag exists in Available Media Tags, you MUST include the token `[SEND_MEDIA:tag_name]` in your response (Note: Video support requires Tier 3 Enterprise).
-        - If customers want to order, book, or purchase, warmly and professionally guide them to provide their name and phone number for fulfillment.
-
-        Available Media Tags: {tags_str}
-        Live Store Catalog Data:
-        {inventory_data}
-        """
-
-        ai_reply = "ሰላም! በምን ልረዳዎ እችላለሁ?"
-        if GROQ_API_KEY:
-            try:
-                ai_reply = await generate_groq_text(
-                    prompt=user_text,
-                    system_instruction=system_prompt,
-                    history_messages=history_messages,
-                    temperature=0.65,
-                    max_output_tokens=700,
+        if http_client and phone_ai_reply:
+            await http_client.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": chat_id, "text": phone_ai_reply},
+            )
+        if supabase:
+            asyncio.create_task(
+                append_one_by_one_lead_conversation(
+                    bot_token=bot_token,
+                    visitor_id=str(chat_id),
+                    visitor_name=visitor_name,
+                    phone_number=phone_matches[0],
+                    user_turn=user_text,
+                    ai_turn=phone_ai_reply,
+                    is_foreign=False,
                 )
-            except Exception as e:
-                logger.error(f"Tenant Groq generation error: {e}")
+            )
+        return {"ok": True}
 
-    media_tags = re.findall(r"\[SEND_MEDIA:([a-zA-Z0-9_\-]+)\]", ai_reply)
-    clean_reply = re.sub(r"\[SEND_MEDIA:[a-zA-Z0-9_\-]+\]", "", ai_reply).strip()
+    lang_instruction = {
+        "amharic": "Respond in highly polished, formal-yet-warm, eloquent, natural, grammatically accurate, and spelling-error-free Ethiopian Amharic (በጣም የተስተካከለ፣ ፕሮፌሽናል፣ የፊደል ስህተት የሌለበት እና ተፈጥሯዊ አማርኛ). Avoid English filler words or awkward phrasing.",
+        "english": "Respond clearly and politely in English.",
+        "oromo": "Respond clearly and politely in Afaan Oromo.",
+    }.get(customer_lang, "Respond in highly polished, grammatically accurate, and natural Ethiopian Amharic.")
 
-    if supabase and bot_token and chat_id:
-        async def save_history():
-            try:
-                await asyncio.gather(
-                    asyncio.to_thread(lambda: supabase.table("chat_history").insert({
-                        "bot_token": bot_token,
-                        "chat_id": str(chat_id),
-                        "role": "user",
-                        "content": user_text,
-                    }).execute()),
-                    asyncio.to_thread(lambda: supabase.table("chat_history").insert({
-                        "bot_token": bot_token,
-                        "chat_id": str(chat_id),
-                        "role": "model",
-                        "content": clean_reply,
-                    }).execute()),
-                )
-            except Exception as e:
-                logger.error(f"Chat history save error: {e}")
+    theme_instruction = {
+        "energetic": "Be enthusiastic, high-energy, and persuasive.",
+        "friendly": "Be warm, welcoming, and conversational.",
+        "executive": "Be authoritative, structured, refined, and VIP-focused.",
+        "sales": "Focus strongly on product value, benefits, and closing interest.",
+        "minimalist": "Keep responses crisp, clean, and direct.",
+    }.get(ui_theme, "Be helpful and structured.")
 
-        asyncio.create_task(save_history())
-        asyncio.create_task(analyze_and_upsert_lead(
-            bot_token=bot_token,
-            chat_id=str(chat_id),
-            visitor_name=visitor_name,
-            user_text=user_text,
-            history_messages=history_messages,
-            inventory_data=inventory_data,
-        ))
+    media_instruction = ""
+    if available_tags:
+        media_instruction = (
+            f"\nAvailable media tags for this store: {', '.join(available_tags)}. "
+            "If the customer asks to see photos, pictures, videos, or media of an item matching a tag, include [SEND_MEDIA: exact_tag_name] in your reply."
+        )
 
-    if media_tags and supabase and http_client:
-        tier_config = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
-        for tag in set(media_tags):
-            try:
-                m_res = await asyncio.to_thread(
-                    lambda t=tag: supabase.table("property_media").select("*").eq("bot_token", bot_token).eq("item_tag", t.lower()).limit(5).execute()
-                )
-                for media_item in (m_res.data or []):
-                    m_type = media_item.get("media_type")
-                    if m_type == "video" and not tier_config["allows_videos"]:
-                        await http_client.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                            "chat_id": chat_id,
-                            "text": "🎥 የቪዲዮ ስትሪሚንግ አገልግሎት ለ **Tier 3 Enterprise** ደንበኞች ብቻ የተፈቀደ ነው።",
-                            "parse_mode": "Markdown",
-                        })
-                        continue
-                    endpoint = "sendVideo" if m_type == "video" else "sendPhoto"
-                    field_name = "video" if m_type == "video" else "photo"
-                    await http_client.post(f"https://api.telegram.org/bot{bot_token}/{endpoint}", json={
-                        "chat_id": chat_id,
-                        field_name: media_item["file_id"],
-                        "caption": media_item.get("caption", ""),
-                    })
-            except Exception as e:
-                logger.error(f"Media send error: {e}")
+    phone_context = (
+        f"\nRegistered Store Phone Number: {registered_phone}"
+        if registered_phone else ""
+    )
 
-    if bot_token and chat_id and http_client and clean_reply:
+    foreign_tier4_context = (
+        "\nTier 4 Global Foreign Client Support Enabled: If a foreign or international client writes in English, French, Arabic, or any international language, respond fluently and warmly in their language while honoring the store catalog."
+        if int(plan_tier or 1) >= 4 else ""
+    )
+
+    system_prompt = f"""
+    You are the AI Sales & Support Concierge for '{store_name}' (Tier {plan_tier}).
+    {lang_instruction}
+    {theme_instruction}
+    Answer strictly based on the store catalog below. If an item is not listed, state that politely and offer alternatives from the catalog.
+    Politely invite the customer to share their phone number if they want follow-up or order assistance.
+    {phone_context}
+    {foreign_tier4_context}
+    {media_instruction}
+
+    Store Catalog:
+    {inventory_data}
+    """
+
+    ai_reply_text = "ሰላም! ጥያቄዎን ተቀብለናል። በምን ልረዳዎ እችላለሁ?"
+    if GROQ_API_KEY:
+        try:
+            ai_reply_text = await generate_groq_text(
+                prompt=user_text,
+                system_instruction=system_prompt,
+                history_messages=history_messages,
+                temperature=0.6,
+                max_output_tokens=700,
+            )
+        except Exception as e:
+            logger.error(f"Store chat Groq error: {e}")
+
+    media_matches = re.findall(r"\[SEND_MEDIA:\s*([a-zA-Z0-9_\-]+)\]", ai_reply_text)
+    clean_ai_reply = re.sub(r"\[SEND_MEDIA:\s*[a-zA-Z0-9_\-]+\]", "", ai_reply_text).strip()
+
+    if http_client and clean_ai_reply:
         await http_client.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": clean_reply},
+            json={
+                "chat_id": chat_id,
+                "text": clean_ai_reply,
+            },
         )
+
+    tier_info = TIER_CONFIG.get(plan_tier, TIER_CONFIG[1])
+    if media_matches and supabase and http_client:
+        for tag_name in media_matches[:3]:
+            try:
+                m_res = await asyncio.to_thread(
+                    lambda tg=tag_name.lower(): supabase.table("property_media").select("*").eq("bot_token", bot_token).eq("item_tag", tg).execute()
+                )
+                for m_row in (m_res.data or [])[:2]:
+                    m_type = m_row.get("media_type", "photo")
+                    f_id = m_row.get("file_id", "")
+                    cap = m_row.get("caption", "")
+                    if not f_id:
+                        continue
+                    if m_type == "video" and not tier_info.get("allows_videos", False):
+                        await http_client.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                            json={"chat_id": chat_id, "text": "ℹ️ የቪዲዮ ስትሪሚንግ በ Tier 3 እና ከዚያ በላይ ብቻ ይገኛል።"},
+                        )
+                        continue
+                    endpoint = "sendVideo" if m_type == "video" else "sendPhoto"
+                    field_key = "video" if m_type == "video" else "photo"
+                    await http_client.post(
+                        f"https://api.telegram.org/bot{bot_token}/{endpoint}",
+                        json={"chat_id": chat_id, field_key: f_id, "caption": cap},
+                    )
+            except Exception as m_err:
+                logger.error(f"Media delivery error: {m_err}")
+
+    if supabase:
+        async def _save_chat_history_and_lead():
+            try:
+                now_user = datetime.now(timezone.utc)
+                now_assistant = now_user + timedelta(milliseconds=500)
+                await asyncio.to_thread(lambda: supabase.table("chat_history").insert([
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "user", "content": user_text, "created_at": now_user.isoformat()},
+                    {"chat_id": str(chat_id), "bot_token": bot_token, "role": "assistant", "content": clean_ai_reply, "created_at": now_assistant.isoformat()}
+                ]).execute())
+
+                phone_match = re.search(r"(\+\d{7,15}|\+251[79]\d{8}|0[79]\d{8})", user_text.replace(" ", ""))
+                detected_phone = phone_match.group(0) if phone_match else None
+                foreign_flag = int(plan_tier or 1) >= 4 and is_foreign_phone_or_client(
+                    raw_phone=detected_phone or "",
+                    language=customer_lang or "",
+                    raw_text=user_text,
+                )
+                await append_one_by_one_lead_conversation(
+                    bot_token=bot_token,
+                    visitor_id=str(chat_id),
+                    visitor_name=visitor_name,
+                    phone_number=detected_phone,
+                    user_turn=user_text,
+                    ai_turn=clean_ai_reply,
+                    is_foreign=foreign_flag,
+                )
+            except Exception as e:
+                logger.error(f"Chat history & one-by-one lead insert error: {e}")
+
+        asyncio.create_task(_save_chat_history_and_lead())
 
     return {"ok": True}
