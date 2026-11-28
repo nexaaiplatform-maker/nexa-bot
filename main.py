@@ -139,6 +139,146 @@ TIER_CONFIG = {
     },
 }
 
+
+def safe_escape_html(value) -> str:
+    """Safely escapes text for HTML and XML responses."""
+    text = "" if value is None else str(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def safe_escape_js_single(value) -> str:
+    """Safely escapes values embedded inside single-quoted inline JavaScript strings."""
+    text = "" if value is None else str(value)
+    return (
+        text.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+def normalize_phone_digits(raw_phone: str | None) -> str:
+    """Normalizes phone numbers into canonical digits (e.g. 251911... or 0911...)."""
+    if not raw_phone:
+        return ""
+    digits = re.sub(r"\D+", "", str(raw_phone))
+    if not digits:
+        return ""
+    if digits.startswith("00") and len(digits) > 4:
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith(("09", "07")):
+        return "251" + digits[1:]
+    if len(digits) == 9 and digits.startswith(("9", "7")):
+        return "251" + digits
+    return digits
+
+
+def is_foreign_phone_or_client(
+    raw_phone: str = "",
+    language: str = "",
+    raw_text: str = "",
+) -> bool:
+    """Detects whether a caller or message represents a non-Ethiopian / international client."""
+    cleaned_phone = str(raw_phone or "").strip()
+    digits = normalize_phone_digits(cleaned_phone)
+    if digits and not digits.startswith("251") and len(digits) >= 7:
+        return True
+    if cleaned_phone.startswith("+") and not cleaned_phone.startswith("+251"):
+        return True
+    lang_norm = (language or "").strip().lower()
+    if lang_norm and lang_norm not in ("amharic", "am", "oromo", "om", "tigrinya", "ti", "sidama", "sid", "wolaytta", "wal"):
+        return True
+    text_sample = str(raw_text or "")
+    foreign_markers = ("international", "abroad", "foreign", "usd", "europe", "america", "dubai", "uk", "canada")
+    return any(m in text_sample.lower() for m in foreign_markers)
+
+
+def build_copy_url_keyboard(url: str) -> InlineKeyboardMarkup:
+    """Builds a Telegram inline keyboard with a callback button to view/copy a generated link."""
+    token_hash = abs(hash(url)) % 100000000
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("📋 ሊንኩን ለመቅዳት ይጫኑ (Copy Link)", callback_data=f"copy_url_alert_{token_hash}")]]
+    )
+
+
+async def append_one_by_one_lead_conversation(
+    bot_token: str,
+    visitor_id: str,
+    visitor_name: str,
+    phone_number: str | None,
+    user_turn: str,
+    ai_turn: str,
+    is_foreign: bool = False,
+):
+    """Appends each conversation turn sequentially to the merchant's lead record in Supabase."""
+    if not supabase or not bot_token:
+        return
+    clean_user = " ".join(str(user_turn or "").split()).strip()
+    clean_ai = " ".join(str(ai_turn or "").split()).strip()
+    if not clean_user and not clean_ai:
+        return
+
+    turn_label = "🌍 Foreign Client" if is_foreign else "💬 Client"
+    one_by_one_entry = f"{turn_label} ({visitor_name}): {clean_user} → 🤖 AI: {clean_ai}"
+
+    try:
+        existing_res = await asyncio.to_thread(
+            lambda: supabase.table("leads")
+            .select("interest_summary, phone_number, visitor_name")
+            .eq("bot_token", bot_token)
+            .eq("visitor_telegram_id", str(visitor_id))
+            .limit(1)
+            .execute()
+        )
+
+        prev_summary = ""
+        existing_phone = None
+        existing_name = None
+        if existing_res.data:
+            row = existing_res.data[0]
+            prev_summary = str(row.get("interest_summary") or "").strip()
+            existing_phone = row.get("phone_number")
+            existing_name = row.get("visitor_name")
+
+        if prev_summary:
+            merged_summary = f"{prev_summary}\n• {one_by_one_entry}"
+        else:
+            merged_summary = f"• {one_by_one_entry}"
+
+        if len(merged_summary) > 3800:
+            turns_list = [t.strip() for t in merged_summary.split("\n• ") if t.strip()]
+            merged_summary = "\n• " + "\n• ".join(turns_list[-25:])
+
+        final_name = visitor_name
+        if existing_name and (not visitor_name or visitor_name.startswith("User ") or visitor_name.startswith("Call Visitor")):
+            final_name = existing_name
+
+        payload = {
+            "bot_token": bot_token,
+            "visitor_telegram_id": str(visitor_id),
+            "visitor_name": final_name,
+            "interest_summary": merged_summary,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        chosen_phone = phone_number or existing_phone
+        if chosen_phone:
+            payload["phone_number"] = chosen_phone
+
+        await asyncio.to_thread(
+            lambda: supabase.table("leads").upsert(
+                payload, on_conflict="bot_token,visitor_telegram_id"
+            ).execute()
+        )
+    except Exception as e:
+        logger.error(f"One-by-one lead conversation append error: {e}")
+
 # Initialize Supabase Client
 supabase: Client | None = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 if not supabase:
@@ -1158,7 +1298,7 @@ async def web_voice_call_turn(request: Request, x_call_session: str | None = Hea
     You are the Tier 4 AI Voice & Foreign Client Concierge for {store_name} ONLY.
     Answer strictly from THIS store's exact catalog and exact phone number below. Never invent prices, items, or phone numbers, and never mix other stores.
     Language Rule: {lang_directive}
-    Keep replies direct, factual, and concise (2-3 sentences max) with no fluff.
+    Keep replies thorough, helpful, and natural for a live voice call (around 3 to 5 clear, well-paced sentences with helpful details from the catalog and clear next steps).
     If the caller has not shared their name or phone number yet, ask for it briefly once when helpful.
 
     Exact Store Phone: {merchant_phone}
@@ -1178,7 +1318,7 @@ async def web_voice_call_turn(request: Request, x_call_session: str | None = Hea
                 system_instruction=system_prompt,
                 history_messages=history_messages[-6:],
                 temperature=0.5,
-                max_output_tokens=280,
+                max_output_tokens=520,
             )
         except Exception as e:
             logger.error(f"Web voice call AI error: {e}")
