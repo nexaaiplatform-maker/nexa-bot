@@ -1296,7 +1296,7 @@ async def transcribe_telegram_voice(bot_token: str, voice_file_id: str) -> str:
         return ""
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root_health():
     return {
         "status": "online",
@@ -4384,6 +4384,7 @@ if telegram_app:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_registration)],
+        per_message=False,
     )
 
     telegram_app.add_handler(CommandHandler("start", start_command))
