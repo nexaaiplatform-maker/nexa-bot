@@ -787,85 +787,85 @@ def parse_dt(dt_str) -> datetime:
         return datetime.now(timezone.utc) + timedelta(days=3)
 
 
-def safe_escape_html(text: str | None) -> str:
-    """Escapes HTML special characters for safe rendering inside HTML templates."""
-    if text is None:
-        return ""
-    return (
-        str(text)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
-
-
-def safe_escape_js_single(text: str | None) -> str:
-    """Escapes text for safe embedding inside single-quoted JavaScript strings."""
-    if text is None:
-        return ""
-    return (
-        str(text)
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "")
-    )
-
-
-def build_copy_url_keyboard(url: str, extra_rows: list[list[InlineKeyboardButton]] | None = None) -> InlineKeyboardMarkup:
-    """Builds an inline keyboard with a copyable URL alert helper so users can copy the exact link cleanly."""
-    callback_tag = f"copy_url_alert_{abs(hash(url)) % 100000000}"
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("📋 ሊንኩን ለመቅዳት ይጫኑ (Copy Link)", callback_data=callback_tag)],
-    ]
-    if extra_rows:
-        rows.extend(extra_rows)
-    return InlineKeyboardMarkup(rows)
-
-
-def normalize_phone_digits(raw_phone: str | None) -> str:
-    """Normalizes Ethiopian and international phone strings into comparable digits."""
-    digits = re.sub(r"\D+", "", raw_phone or "")
-    if digits.startswith("251") and len(digits) == 12:
-        return "0" + digits[3:]
-    if digits.startswith("00") and len(digits) > 4:
-        return digits[2:]
-    return digits
-
-
-def is_foreign_phone_or_client(raw_phone: str | None = "", language: str = "", raw_text: str = "") -> bool:
-    """Detects whether a client/caller is a foreign client via international prefix or language."""
-    digits = re.sub(r"\D+", "", raw_phone or "")
-    if digits and not (digits.startswith("09") or digits.startswith("07") or digits.startswith("2519") or digits.startswith("2517")):
-        return True
-    if str(raw_phone or "").strip().startswith("+") and not str(raw_phone or "").strip().startswith("+251"):
-        return True
-    lang_norm = (language or "").strip().lower()
-    if lang_norm in ("english", "en", "french", "fr", "arabic", "ar", "foreign", "international"):
-        return True
-    if raw_text and re.search(r"\b(foreign|international|abroad|outside ethiopia|export|global client)\b", raw_text.lower()):
-        return True
-    return False
-
-
-async def append_one_by_one_lead_conversation(
-    bot_token: str,
-    visitor_id: str,
-    visitor_name: str,
-    phone_number: str | None,
-    user_turn: str,
-    ai_turn: str,
-    is_foreign: bool = False,
-):
-    """Appends each conversation turn one-by-one into the lead's simplified conversation log."""
-    if not supabase or not bot_token or not visitor_id:
+async def log_visitor(user_id: int | str):
+    """Records a visitor on the master Nexa bot without failing if Supabase is unavailable."""
+    if not supabase:
         return
+    try:
+        uid_str = str(user_id)
+        await asyncio.to_thread(
+            lambda: supabase.table("visitors").upsert(
+                {
+                    "user_id": uid_str,
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="user_id",
+            ).execute()
+        )
+    except Exception as e:
+        logger.debug(f"Visitor log skipped or failed: {e}")
 
-    clean_user = str(user_turn or "").strip()
-    clean_ai = str(ai_turn or "").strip()
+
+async def get_or_create_user_subscription(user_id: int | str) -> dict:
+    """Fetches or initializes a user's subscription record with a 3-day free trial."""
+    uid_str = str(user_id)
+    now = datetime.now(timezone.utc)
+    default_sub = {
+        "user_id": uid_str,
+        "is_pro": False,
+        "plan_tier": 1,
+        "credits_remaining": TIER_CONFIG[1]["credits"],
+        "trial_expires": (now + timedelta(days=3)).isoformat(),
+    }
+    if not supabase:
+        return default_sub
+    try:
+        res = await asyncio.to_thread(
+            lambda: supabase.table("subscriptions").select("*").eq("user_id", uid_str).limit(1).execute()
+        )
+        if res.data:
+            row = res.data[0]
+            return {
+                "user_id": uid_str,
+                "is_pro": bool(row.get("is_pro", False)),
+                "plan_tier": int(row.get("plan_tier") or 1),
+                "credits_remaining": int(row.get("credits_remaining") if row.get("credits_remaining") is not None else TIER_CONFIG[1]["credits"]),
+                "trial_expires": row.get("trial_expires") or default_sub["trial_expires"],
+            }
+        await asyncio.to_thread(
+            lambda: supabase.table("subscriptions").upsert(default_sub, on_conflict="user_id").execute()
+        )
+        return default_sub
+    except Exception as e:
+        logger.error(f"Subscription fetch/create error for {uid_str}: {e}")
+        return default_sub
+
+
+async def verify_active_access(user_id: int | str) -> bool:
+    """Returns True if the user has an active pro plan or is still inside their free trial window."""
+    sub = await get_or_create_user_subscription(user_id)
+    if sub.get("is_pro"):
+        return True
+    exp = parse_dt(sub.get("trial_expires"))
+    return datetime.now(timezone.utc) < exp
+
+
+async def deduct_credit(user_id: int | str, amount: int = 1):
+    """Decrements remaining credits for non-unlimited trial/starter accounts when tracked in Supabase."""
+    if not supabase or amount <= 0:
+        return
+    uid_str = str(user_id)
+    try:
+        sub = await get_or_create_user_subscription(uid_str)
+        current_credits = int(sub.get("credits_remaining") or 0)
+        if current_credits >= 999999:
+            return
+        next_credits = max(0, current_credits - amount)
+        await asyncio.to_thread(
+            lambda: supabase.table("subscriptions").update({"credits_remaining": next_credits}).eq("user_id", uid_str).execute()
+        )
+    except Exception as e:
+        logger.debug(f"Credit deduction skipped for {uid_str}: {e}")
     if not clean_user and not clean_ai:
         return
 
@@ -4696,10 +4696,10 @@ if telegram_app:
     telegram_app.add_handler(MessageHandler(filters.VOICE, handle_master_voice))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_master_message))
 
+    async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error(f"Telegram bot update error: {context.error}", exc_info=context.error)
 
-@app.on_event("startup")
-async def startup_event():
-    global http_client
+    telegram_app.add_error_handler(_telegram_error_handler)
     http_client = httpx.AsyncClient(timeout=25.0)
     if telegram_app:
         await telegram_app.initialize()
